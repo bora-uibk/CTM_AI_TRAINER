@@ -30,6 +30,14 @@ export interface TeamRoom {
   is_active: boolean
   current_question: any
   current_answers: Record<string, any>
+  num_teams: number
+  questions_per_team: number
+  time_per_question: number
+  current_turn_team_id: number
+  current_question_index: number
+  team_questions: Record<string, any[]>
+  team_scores: Record<string, number>
+  room_status: 'lobby' | 'in_progress' | 'finished'
   created_at: string
   updated_at: string
 }
@@ -39,6 +47,7 @@ export interface RoomParticipant {
   room_id: string
   user_id: string
   user_email: string
+  team_number: number
   joined_at: string
 }
 
