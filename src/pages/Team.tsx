@@ -1,25 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { supabase, TeamRoom, RoomParticipant, QuizQuestion } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
-import { 
-  Users, 
-  Plus, 
-  LogIn, 
-  Crown, 
-  UserCheck,
-  Send,
-  RotateCcw,
-  Trophy,
-  Loader,
-  Clock,
-  Play,
-  Settings,
-  CheckCircle,
-  XCircle,
-  Timer,
-  Target,
-  Award
-} from 'lucide-react'
+import { Users, Plus, LogIn, Crown, UserCheck, Send, RotateCcw, Trophy, Loader, Clock, Play, Settings, CircleCheck as CheckCircle, Circle as XCircle, Timer, Target, Award } from 'lucide-react'
 
 export default function Team() {
   const { user } = useAuth()
