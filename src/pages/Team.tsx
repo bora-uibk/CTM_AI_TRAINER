@@ -32,7 +32,8 @@ export default function Team() {
   useEffect(() => {
     if (currentRoom) {
       fetchParticipants()
-      subscribeToRoomUpdates()
+      const cleanup = subscribeToRoomUpdates()
+      return cleanup
     }
   }, [currentRoom])
 
@@ -87,6 +88,8 @@ export default function Team() {
   const subscribeToRoomUpdates = () => {
     if (!currentRoom) return
 
+    console.log('🔔 Setting up real-time subscriptions for room:', currentRoom.id)
+
     const subscription = supabase
       .channel(`room-${currentRoom.id}`)
       .on('postgres_changes', {
@@ -95,8 +98,10 @@ export default function Team() {
         table: 'team_rooms',
         filter: `id=eq.${currentRoom.id}`
       }, (payload) => {
+        console.log('🔄 Room update received:', payload)
         if (payload.new) {
           const updatedRoom = payload.new as TeamRoom
+          console.log('📝 Updating room state:', updatedRoom.room_status, updatedRoom.current_question_index)
           setCurrentRoom(updatedRoom)
           
           // Update timer when question changes
@@ -112,6 +117,7 @@ export default function Team() {
         table: 'room_participants',
         filter: `room_id=eq.${currentRoom.id}`
       }, () => {
+        console.log('👥 Participants updated, refetching...')
         fetchParticipants()
       })
       .subscribe()
@@ -243,26 +249,48 @@ export default function Team() {
     try {
       // Generate questions for all teams
       const totalQuestions = currentRoom.num_teams * currentRoom.questions_per_team
+      console.log('🎯 Generating questions:', { totalQuestions, numTeams: currentRoom.num_teams, questionsPerTeam: currentRoom.questions_per_team })
+      
       const { data, error } = await supabase.functions.invoke('generate-quiz', {
         body: { count: totalQuestions }
       })
 
-      if (error) throw error
+      if (error) {
+        console.error('❌ Quiz generation error:', error)
+        throw error
+      }
+
+      console.log('✅ Quiz generation response:', data)
+
+      if (!data || !data.questions || !Array.isArray(data.questions)) {
+        throw new Error('Invalid quiz generation response')
+      }
 
       // Distribute questions among teams
       const teamQuestions: Record<string, QuizQuestion[]> = {}
       const teamScores: Record<string, number> = {}
       
       for (let i = 1; i <= currentRoom.num_teams; i++) {
+        const startIndex = (i - 1) * currentRoom.questions_per_team
+        const endIndex = i * currentRoom.questions_per_team
         teamQuestions[i.toString()] = data.questions.slice(
-          (i - 1) * currentRoom.questions_per_team,
-          i * currentRoom.questions_per_team
+          startIndex,
+          endIndex
         )
         teamScores[i.toString()] = 0
+        console.log(`📋 Team ${i} questions:`, teamQuestions[i.toString()].length)
       }
 
+      // Get the first question for team 1
+      const firstQuestion = teamQuestions['1'][0]
+      if (!firstQuestion) {
+        throw new Error('No questions available for team 1')
+      }
+
+      console.log('🚀 Starting game with first question:', firstQuestion)
+
       // Start the game
-      await supabase
+      const { error: updateError } = await supabase
         .from('team_rooms')
         .update({
           room_status: 'in_progress',
@@ -270,14 +298,23 @@ export default function Team() {
           team_scores: teamScores,
           current_turn_team_id: 1,
           current_question_index: 0,
-          current_question: teamQuestions['1'][0],
+          current_question: firstQuestion,
           current_answers: {}
         })
         .eq('id', currentRoom.id)
 
+      if (updateError) {
+        console.error('❌ Room update error:', updateError)
+        throw updateError
+      }
+
+      console.log('✅ Game started successfully')
       setSelectedAnswer(null)
+      setTimeRemaining(currentRoom.time_per_question)
+      setTimerActive(true)
     } catch (error) {
       console.error('Error starting game:', error)
+      alert(`Failed to start game: ${error.message}`)
     } finally {
       setLoading(false)
     }
@@ -309,6 +346,7 @@ export default function Team() {
   const checkTeamConsensus = async () => {
     if (!currentRoom || !user) return
 
+    console.log('🤝 Checking team consensus...')
     const currentTeamMembers = participants.filter(p => p.team_number === currentRoom.current_turn_team_id)
     const currentAnswers = currentRoom.current_answers || {}
     
@@ -323,8 +361,11 @@ export default function Team() {
       const firstAnswer = teamAnswers[0]?.answer
       const allSame = teamAnswers.every(answer => answer.answer === firstAnswer)
 
+      console.log('📊 Team consensus check:', { teamAnswers: teamAnswers.length, totalMembers: currentTeamMembers.length, allSame })
+
       if (allSame) {
         // Consensus reached, advance to next question
+        console.log('✅ Consensus reached, advancing to next question')
         await advanceToNextQuestion(firstAnswer)
       }
     }
@@ -333,6 +374,7 @@ export default function Team() {
   const advanceToNextQuestion = async (teamAnswer: string | number) => {
     if (!currentRoom) return
 
+    console.log('⏭️ Advancing to next question with answer:', teamAnswer)
     try {
       const currentTeam = currentRoom.current_turn_team_id
       const currentQuestion = currentRoom.current_question as QuizQuestion
@@ -361,6 +403,7 @@ export default function Team() {
       // Check if game is finished
       const maxQuestions = Math.max(...Object.values(currentRoom.team_questions).map((q: any) => q.length))
       if (nextQuestionIndex >= maxQuestions) {
+        console.log('🏁 Game finished!')
         roomStatus = 'finished'
         await supabase
           .from('team_rooms')
@@ -373,6 +416,7 @@ export default function Team() {
           .eq('id', currentRoom.id)
       } else {
         // Get next question for the next team
+        console.log('📋 Getting next question for team:', nextTeam, 'question index:', nextQuestionIndex)
         const teamQuestions = currentRoom.team_questions[nextTeam.toString()] || []
         if (nextQuestionIndex < teamQuestions.length) {
           nextQuestion = teamQuestions[nextQuestionIndex]
@@ -390,6 +434,7 @@ export default function Team() {
           .eq('id', currentRoom.id)
       }
 
+      console.log('✅ Question advanced successfully')
       setSelectedAnswer(null)
       setTimerActive(false)
       setTimeRemaining(0)
