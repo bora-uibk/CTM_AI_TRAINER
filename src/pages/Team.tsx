@@ -192,7 +192,7 @@ export default function Team() {
         .select('*')
         .eq('room_id', room.id)
         .eq('user_id', user.id)
-        .single()
+        .maybeSingle()
 
       if (!existing) {
         await supabase
