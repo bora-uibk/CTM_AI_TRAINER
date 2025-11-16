@@ -70,75 +70,122 @@ async function generateQuestionsWithGemini(context, count) {
     if (!apiKey) {
       throw new Error('GEMINI_API_KEY not configured');
     }
+    
     console.log('🔧 Initializing Gemini...');
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-2.0-flash-exp',  // Updated model name
       generationConfig: {
-        temperature: 0.8,
+        temperature: 0.7,  // Lower temperature for more consistent JSON
         topK: 40,
         topP: 0.95,
-        maxOutputTokens: 3000
+        maxOutputTokens: 4000,
+        responseMimeType: "application/json"  // Force JSON response
       }
     });
-    const prompt = `You are a Formula Student quiz generator. Based on the following Formula Student rules and documentation, generate ${count} diverse quiz questions.
 
-CONTEXT FROM FORMULA STUDENT RULES:
+    const prompt = `Generate ${count} Formula Student quiz questions based on this context. Return ONLY a valid JSON array.
+
+CONTEXT:
 ${context}
 
-Generate exactly ${count} questions in this JSON format (RETURN ONLY THE JSON ARRAY, NO OTHER TEXT):
+Return this exact JSON structure:
 [
   {
     "type": "multiple_choice",
-    "question": "Specific question based on the rules?",
-    "options": ["Option A", "Option B", "Option C", "Option D"],
+    "question": "Question text?",
+    "options": ["A", "B", "C", "D"],
     "correct_answer": 0,
-    "explanation": "Clear explanation citing the rules",
+    "explanation": "Why this is correct",
     "difficulty": "medium"
   },
   {
     "type": "true_false",
-    "question": "Statement about the rules",
+    "question": "Statement",
     "correct_answer": true,
     "explanation": "Explanation",
     "difficulty": "easy"
   }
 ]
 
-REQUIREMENTS:
-- Questions MUST be based on the provided context
-- Mix of difficulty levels: easy (40%), medium (40%), hard (20%)
-- Include mix of multiple_choice and true_false types
-- correct_answer for multiple_choice is index (0-3)
-- correct_answer for true_false is boolean
-- All explanations must reference specific rules from the context
-- Return ONLY valid JSON array, no markdown, no additional text`;
+Rules:
+- ${count} questions total
+- Mix of multiple_choice and true_false
+- correct_answer: index (0-3) for multiple_choice, boolean for true_false
+- Use difficulty: "easy", "medium", or "hard"
+- Base questions on the provided context
+- Return ONLY the JSON array, no other text`;
+
     console.log('📤 Sending prompt to Gemini...');
     const result = await model.generateContent(prompt);
     const response = result.response.text();
+    
     console.log('📥 Gemini response length:', response.length);
-    console.log('📝 Gemini response preview:', response.substring(0, 300));
-    // Clean up response - remove markdown code blocks if present
-    let cleanedResponse = response.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-    console.log('🧹 Cleaned response:', cleanedResponse.substring(0, 200));
-    // Try to extract JSON array
-    const jsonMatch = cleanedResponse.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) {
-      console.error('❌ No JSON array found in response');
-      throw new Error('No valid JSON array found in Gemini response');
+    console.log('📝 Full Gemini response:', response);  // Log the full response
+
+    // Multiple cleaning strategies
+    let cleanedResponse = response
+      .replace(/```json\n?/g, '')
+      .replace(/```\n?/g, '')
+      .replace(/^[^[{]*/, '')  // Remove anything before first [ or {
+      .replace(/[^}\]]*$/, '')  // Remove anything after last } or ]
+      .trim();
+
+    console.log('🧹 Cleaned response:', cleanedResponse);
+
+    // Try to parse
+    let questions;
+    try {
+      questions = JSON.parse(cleanedResponse);
+      console.log('✅ Direct parse successful');
+    } catch (parseError) {
+      console.log('⚠️ Direct parse failed, trying to extract array...');
+      
+      // Try to find JSON array using regex
+      const jsonMatch = cleanedResponse.match(/\[[\s\S]*\]/);
+      if (!jsonMatch) {
+        console.error('❌ No JSON array found in response');
+        console.error('Full cleaned response:', cleanedResponse);
+        throw new Error('No valid JSON array found in Gemini response');
+      }
+      
+      try {
+        questions = JSON.parse(jsonMatch[0]);
+        console.log('✅ Regex extraction parse successful');
+      } catch (regexParseError) {
+        console.error('❌ Regex parse also failed');
+        console.error('Extracted JSON:', jsonMatch[0]);
+        throw new Error('Could not parse JSON from Gemini response');
+      }
     }
-    const questions = JSON.parse(jsonMatch[0]);
+
+    if (!Array.isArray(questions)) {
+      console.error('❌ Response is not an array:', typeof questions);
+      throw new Error('Gemini response is not an array');
+    }
+
     console.log('✅ Parsed questions:', questions.length);
-    // Validate and add IDs
-    return questions.map((q, index)=>({
+
+    // Validate and normalize questions
+    return questions.map((q, index) => {
+      // Ensure correct_answer is properly typed
+      let correctAnswer = q.correct_answer;
+      if (q.type === 'true_false') {
+        correctAnswer = correctAnswer === true || correctAnswer === 'true' || correctAnswer === 1;
+      } else {
+        correctAnswer = parseInt(correctAnswer);
+      }
+
+      return {
         id: (index + 1).toString(),
         type: q.type || 'multiple_choice',
         question: q.question,
-        options: q.options,
-        correct_answer: q.correct_answer,
-        explanation: q.explanation,
+        options: q.options || [],
+        correct_answer: correctAnswer,
+        explanation: q.explanation || 'No explanation provided',
         difficulty: q.difficulty || 'medium'
-      }));
+      };
+    });
   } catch (error) {
     console.error('❌ Error in generateQuestionsWithGemini:', error.message);
     console.error('Stack:', error.stack);
