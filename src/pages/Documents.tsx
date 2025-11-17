@@ -1,17 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
-import { 
-  Upload, 
-  FileText, 
-  Download, 
-  Trash2, 
-  Loader, 
-  CheckCircle, 
-  AlertCircle,
-  Check,
-  Settings
-} from 'lucide-react'
+import { Upload, FileText, Download, Trash2, Loader, CircleCheck as CheckCircle, CircleAlert as AlertCircle, Check, Settings } from 'lucide-react'
 
 interface Document {
   id: string
