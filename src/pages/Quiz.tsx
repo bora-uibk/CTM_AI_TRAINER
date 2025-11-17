@@ -12,7 +12,9 @@ import {
   Clock,
   Settings,
   Play,
-  Pause
+  Pause,
+  FileText,
+  Check
 } from 'lucide-react'
 
 export default function Quiz() {
@@ -35,6 +37,9 @@ export default function Quiz() {
   const [quizPaused, setQuizPaused] = useState(false)
   const [aiFeedback, setAiFeedback] = useState('')
   const [loadingFeedback, setLoadingFeedback] = useState(false)
+  const [showDocumentSelector, setShowDocumentSelector] = useState(false)
+  const [selectedDocuments, setSelectedDocuments] = useState<Set<string>>(new Set())
+  const [availableDocuments, setAvailableDocuments] = useState<any[]>([])
 
   const currentQuestion = questions[currentQuestionIndex]
   const isLastQuestion = currentQuestionIndex === questions.length - 1
@@ -56,6 +61,47 @@ export default function Quiz() {
     return () => clearInterval(interval)
   }, [quizStarted, quizPaused, timeRemaining])
 
+  useEffect(() => {
+    fetchDocuments()
+    // Load selected documents from localStorage
+    const saved = localStorage.getItem('selectedDocuments')
+    if (saved) {
+      setSelectedDocuments(new Set(JSON.parse(saved)))
+    }
+  }, [])
+
+  const fetchDocuments = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('documents')
+        .select('*')
+        .order('created_at', { ascending: false })
+
+      if (error) throw error
+      
+      // Filter to only show documents with valid content
+      const validDocs = (data || []).filter(doc => 
+        doc.content && 
+        !doc.content.startsWith('[PDF Document:') && 
+        doc.content.length > 100
+      )
+      setAvailableDocuments(validDocs)
+    } catch (error) {
+      console.error('Error fetching documents:', error)
+    }
+  }
+
+  const toggleDocumentSelection = (docId: string) => {
+    const newSelected = new Set(selectedDocuments)
+    if (newSelected.has(docId)) {
+      newSelected.delete(docId)
+    } else {
+      newSelected.add(docId)
+    }
+    setSelectedDocuments(newSelected)
+    localStorage.setItem('selectedDocuments', JSON.stringify(Array.from(newSelected)))
+  }
+
   const handleTimeUp = () => {
     setQuizStarted(false)
     setShowResult(true)
@@ -66,7 +112,10 @@ export default function Quiz() {
     setGenerating(true)
     try {
       const { data, error } = await supabase.functions.invoke('generate-quiz', {
-        body: { count: quizSettings.questionCount }
+        body: { 
+          count: quizSettings.questionCount,
+          selectedDocuments: Array.from(selectedDocuments)
+        }
       })
 
       if (error) throw error
@@ -213,7 +262,69 @@ export default function Quiz() {
           <p className="text-gray-600 mt-1">
             Configure your Formula Student quiz
           </p>
+          <div className="flex items-center justify-between mt-2">
+            <p className="text-sm text-gray-500">
+              {selectedDocuments.size > 0 
+                ? `Using ${selectedDocuments.size} selected document${selectedDocuments.size !== 1 ? 's' : ''}`
+                : 'Using all available documents'
+              }
+            </p>
+            <button
+              onClick={() => setShowDocumentSelector(!showDocumentSelector)}
+              className="flex items-center space-x-1 text-sm text-primary-600 hover:text-primary-700"
+            >
+              <Settings className="w-4 h-4" />
+              <span>Select Documents</span>
+            </button>
+          </div>
         </div>
+
+        {/* Document Selector */}
+        {showDocumentSelector && (
+          <div className="card mb-6">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">Select Documents for Quiz</h3>
+            {availableDocuments.length === 0 ? (
+              <p className="text-gray-600">No valid documents available. Please upload and process documents first.</p>
+            ) : (
+              <div className="space-y-2 max-h-60 overflow-y-auto">
+                {availableDocuments.map((doc) => (
+                  <div
+                    key={doc.id}
+                    onClick={() => toggleDocumentSelection(doc.id)}
+                    className={`flex items-center space-x-3 p-3 rounded-lg border-2 cursor-pointer transition-colors ${
+                      selectedDocuments.has(doc.id)
+                        ? 'border-primary-500 bg-primary-50'
+                        : 'border-gray-200 hover:bg-gray-50'
+                    }`}
+                  >
+                    <div className={`w-5 h-5 rounded border-2 flex items-center justify-center ${
+                      selectedDocuments.has(doc.id)
+                        ? 'border-primary-500 bg-primary-500'
+                        : 'border-gray-300'
+                    }`}>
+                      {selectedDocuments.has(doc.id) && (
+                        <Check className="w-3 h-3 text-white" />
+                      )}
+                    </div>
+                    <FileText className="w-5 h-5 text-primary-600" />
+                    <div className="flex-1">
+                      <p className="font-medium text-gray-900">{doc.name}</p>
+                      <p className="text-sm text-gray-500">{doc.content.length} characters</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="mt-4 flex justify-end">
+              <button
+                onClick={() => setShowDocumentSelector(false)}
+                className="btn-primary"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        )}
 
         <div className="card">
           <div className="space-y-6">

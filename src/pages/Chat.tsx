@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { supabase, ChatMessage } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
-import { Send, Bot, User, Loader, FileText } from 'lucide-react'
+import { Send, Bot, User, Loader, FileText, Settings, Check } from 'lucide-react'
 
 export default function Chat() {
   const { user } = useAuth()
@@ -9,6 +9,9 @@ export default function Chat() {
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const [showDocumentSelector, setShowDocumentSelector] = useState(false)
+  const [selectedDocuments, setSelectedDocuments] = useState<Set<string>>(new Set())
+  const [availableDocuments, setAvailableDocuments] = useState<any[]>([])
 
   useEffect(() => {
     // Add welcome message
@@ -23,8 +26,49 @@ export default function Chat() {
   }, [])
 
   useEffect(() => {
+    fetchDocuments()
+    // Load selected documents from localStorage
+    const saved = localStorage.getItem('selectedDocuments')
+    if (saved) {
+      setSelectedDocuments(new Set(JSON.parse(saved)))
+    }
+  }, [])
+
+  useEffect(() => {
     scrollToBottom()
   }, [messages])
+
+  const fetchDocuments = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('documents')
+        .select('*')
+        .order('created_at', { ascending: false })
+
+      if (error) throw error
+      
+      // Filter to only show documents with valid content
+      const validDocs = (data || []).filter(doc => 
+        doc.content && 
+        !doc.content.startsWith('[PDF Document:') && 
+        doc.content.length > 100
+      )
+      setAvailableDocuments(validDocs)
+    } catch (error) {
+      console.error('Error fetching documents:', error)
+    }
+  }
+
+  const toggleDocumentSelection = (docId: string) => {
+    const newSelected = new Set(selectedDocuments)
+    if (newSelected.has(docId)) {
+      newSelected.delete(docId)
+    } else {
+      newSelected.add(docId)
+    }
+    setSelectedDocuments(newSelected)
+    localStorage.setItem('selectedDocuments', JSON.stringify(Array.from(newSelected)))
+  }
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -47,7 +91,10 @@ export default function Chat() {
 
     try {
       const { data, error } = await supabase.functions.invoke('chat-rag', {
-        body: { query: userMessage.content }
+        body: { 
+          query: userMessage.content,
+          selectedDocuments: Array.from(selectedDocuments)
+        }
       })
 
       if (error) throw error
@@ -82,7 +129,69 @@ export default function Chat() {
         <p className="text-gray-600 mt-1">
           Ask questions about Formula Student rules and regulations
         </p>
+        <div className="flex items-center justify-between mt-2">
+          <p className="text-sm text-gray-500">
+            {selectedDocuments.size > 0 
+              ? `Using ${selectedDocuments.size} selected document${selectedDocuments.size !== 1 ? 's' : ''}`
+              : 'Using all available documents'
+            }
+          </p>
+          <button
+            onClick={() => setShowDocumentSelector(!showDocumentSelector)}
+            className="flex items-center space-x-1 text-sm text-primary-600 hover:text-primary-700"
+          >
+            <Settings className="w-4 h-4" />
+            <span>Select Documents</span>
+          </button>
+        </div>
       </div>
+
+      {/* Document Selector */}
+      {showDocumentSelector && (
+        <div className="card mb-6">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">Select Documents for Q&A</h3>
+          {availableDocuments.length === 0 ? (
+            <p className="text-gray-600">No valid documents available. Please upload and process documents first.</p>
+          ) : (
+            <div className="space-y-2 max-h-60 overflow-y-auto">
+              {availableDocuments.map((doc) => (
+                <div
+                  key={doc.id}
+                  onClick={() => toggleDocumentSelection(doc.id)}
+                  className={`flex items-center space-x-3 p-3 rounded-lg border-2 cursor-pointer transition-colors ${
+                    selectedDocuments.has(doc.id)
+                      ? 'border-primary-500 bg-primary-50'
+                      : 'border-gray-200 hover:bg-gray-50'
+                  }`}
+                >
+                  <div className={`w-5 h-5 rounded border-2 flex items-center justify-center ${
+                    selectedDocuments.has(doc.id)
+                      ? 'border-primary-500 bg-primary-500'
+                      : 'border-gray-300'
+                  }`}>
+                    {selectedDocuments.has(doc.id) && (
+                      <Check className="w-3 h-3 text-white" />
+                    )}
+                  </div>
+                  <FileText className="w-5 h-5 text-primary-600" />
+                  <div className="flex-1">
+                    <p className="font-medium text-gray-900">{doc.name}</p>
+                    <p className="text-sm text-gray-500">{doc.content.length} characters</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="mt-4 flex justify-end">
+            <button
+              onClick={() => setShowDocumentSelector(false)}
+              className="btn-primary"
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Chat Messages */}
       <div className="flex-1 card overflow-hidden flex flex-col">

@@ -17,6 +17,7 @@ export default function Team() {
   const [selectedTeam, setSelectedTeam] = useState<number>(1)
   const [timeRemaining, setTimeRemaining] = useState(0)
   const [timerActive, setTimerActive] = useState(false)
+  const [selectedDocuments, setSelectedDocuments] = useState<Set<string>>(new Set())
   
   // Room creation settings
   const [roomSettings, setRoomSettings] = useState({
@@ -27,13 +28,24 @@ export default function Team() {
 
   useEffect(() => {
     fetchRooms()
+    // Load selected documents from localStorage
+    const saved = localStorage.getItem('selectedDocuments')
+    if (saved) {
+      setSelectedDocuments(new Set(JSON.parse(saved)))
+    }
   }, [])
 
   useEffect(() => {
     if (currentRoom) {
       fetchParticipants()
-      const cleanup = subscribeToRoomUpdates()
-      return cleanup
+      subscribeToRoomUpdates()
+    }
+    
+    return () => {
+      // Cleanup subscription when component unmounts or room changes
+      if (currentRoom) {
+        console.log('🧹 Cleaning up subscriptions for room:', currentRoom.id)
+      }
     }
   }, [currentRoom])
 
@@ -86,11 +98,12 @@ export default function Team() {
   }
 
   const subscribeToRoomUpdates = () => {
-    if (!currentRoom) return
+    if (!currentRoom) return () => {}
 
     console.log('🔔 Setting up real-time subscriptions for room:', currentRoom.id)
 
-    const subscription = supabase
+    // Subscribe to room updates
+    const roomSubscription = supabase
       .channel(`room-${currentRoom.id}`)
       .on('postgres_changes', {
         event: '*',
@@ -98,7 +111,7 @@ export default function Team() {
         table: 'team_rooms',
         filter: `id=eq.${currentRoom.id}`
       }, (payload) => {
-        console.log('🔄 Room update received:', payload)
+        console.log('🔄 Room update received:', payload.eventType, payload.new)
         if (payload.new) {
           const updatedRoom = payload.new as TeamRoom
           console.log('📝 Updating room state:', updatedRoom.room_status, updatedRoom.current_question_index)
@@ -122,8 +135,24 @@ export default function Team() {
       })
       .subscribe()
 
+    // Subscribe to participant updates
+    const participantSubscription = supabase
+      .channel(`participants-${currentRoom.id}`)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'room_participants',
+        filter: `room_id=eq.${currentRoom.id}`
+      }, (payload) => {
+        console.log('👥 Participants updated:', payload.eventType)
+        fetchParticipants()
+      })
+      .subscribe()
+
+    // Return cleanup function
     return () => {
-      subscription.unsubscribe()
+      roomSubscription.unsubscribe()
+      participantSubscription.unsubscribe()
     }
   }
 
@@ -252,7 +281,10 @@ export default function Team() {
       console.log('🎯 Generating questions:', { totalQuestions, numTeams: currentRoom.num_teams, questionsPerTeam: currentRoom.questions_per_team })
       
       const { data, error } = await supabase.functions.invoke('generate-quiz', {
-        body: { count: totalQuestions }
+        body: { 
+          count: totalQuestions,
+          selectedDocuments: Array.from(selectedDocuments)
+        }
       })
 
       if (error) {

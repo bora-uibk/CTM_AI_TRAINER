@@ -14,11 +14,38 @@ serve(async (req)=>{
   try {
     console.log('🎯 Quiz generation started');
     const supabaseClient = createClient(Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '');
-    const { count = 5 } = await req.json();
+    const { count = 5, selectedDocuments } = await req.json();
     console.log('📊 Requested question count:', count);
+    console.log('📋 Selected documents:', selectedDocuments?.length || 0);
+    
     // Get documents for context
     console.log('📚 Fetching documents...');
-    const { data: documents, error: docError } = await supabaseClient.from('documents').select('content, name').limit(10);
+    
+    let documents;
+    let docError;
+    
+    if (selectedDocuments && selectedDocuments.length > 0) {
+      // Use only selected documents
+      const { data: selectedDocs, error: selectedError } = await supabaseClient
+        .from('documents')
+        .select('content, name')
+        .in('id', selectedDocuments);
+      
+      documents = selectedDocs;
+      docError = selectedError;
+      console.log('📄 Using selected documents');
+    } else {
+      // Use all documents
+      const { data: allDocs, error: allError } = await supabaseClient
+        .from('documents')
+        .select('content, name')
+        .limit(10);
+      
+      documents = allDocs;
+      docError = allError;
+      console.log('📄 Using all available documents');
+    }
+    
     if (docError) {
       console.error('❌ Error fetching documents:', docError);
       return getFallbackQuestions(count);

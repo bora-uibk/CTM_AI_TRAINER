@@ -12,18 +12,42 @@ serve(async (req)=>{
   }
   try {
     const supabaseClient = createClient(Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '');
-    const { query } = await req.json();
+    const { query, selectedDocuments } = await req.json();
     if (!query || query.trim().length === 0) {
       throw new Error('Query is required');
     }
+    
+    console.log('📋 Selected documents:', selectedDocuments?.length || 0);
+    
     // Generate query embedding
     const queryEmbedding = await generateEmbedding(query);
-    // Find similar documents using vector similarity
-    const { data: documents, error } = await supabaseClient.rpc('match_documents', {
-      query_embedding: queryEmbedding,
-      match_threshold: 0.3,
-      match_count: 5
-    });
+    
+    let documents;
+    let error;
+    
+    if (selectedDocuments && selectedDocuments.length > 0) {
+      // Use only selected documents
+      const { data: selectedDocs, error: selectedError } = await supabaseClient
+        .from('documents')
+        .select('id, name, content')
+        .in('id', selectedDocuments);
+      
+      documents = selectedDocs;
+      error = selectedError;
+      console.log('📄 Using selected documents:', documents?.length || 0);
+    } else {
+      // Find similar documents using vector similarity
+      const { data: vectorDocs, error: vectorError } = await supabaseClient.rpc('match_documents', {
+        query_embedding: queryEmbedding,
+        match_threshold: 0.3,
+        match_count: 5
+      });
+      
+      documents = vectorDocs;
+      error = vectorError;
+      console.log('🔍 Using vector search:', documents?.length || 0);
+    }
+    
     if (error) {
       console.error('Vector search error:', error);
       // Fallback to text search

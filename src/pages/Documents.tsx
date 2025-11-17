@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { supabase, Document } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
-import { Upload, FileText, Download, Trash2, CircleAlert as AlertCircle, CircleCheck as CheckCircle, Loader } from 'lucide-react'
+import { Upload, FileText, Download, Trash2, CircleAlert as AlertCircle, CircleCheck as CheckCircle, Loader, Check } from 'lucide-react'
 import * as pdfjsLib from 'pdfjs-dist/build/pdf'
 import PdfWorker from 'pdfjs-dist/build/pdf.worker.mjs?url'
 
@@ -15,6 +15,7 @@ export default function Documents() {
   const [uploading, setUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState('')
   const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null)
+  const [selectedDocuments, setSelectedDocuments] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     fetchDocuments()
@@ -200,6 +201,35 @@ export default function Documents() {
     }
   }
 
+  const toggleDocumentSelection = (docId: string) => {
+    const newSelected = new Set(selectedDocuments)
+    if (newSelected.has(docId)) {
+      newSelected.delete(docId)
+    } else {
+      newSelected.add(docId)
+    }
+    setSelectedDocuments(newSelected)
+    
+    // Store in localStorage for other components to access
+    localStorage.setItem('selectedDocuments', JSON.stringify(Array.from(newSelected)))
+  }
+
+  const selectAllDocuments = () => {
+    const validDocs = documents.filter(doc => 
+      doc.content && 
+      !doc.content.startsWith('[PDF Document:') && 
+      doc.content.length > 100
+    )
+    const allIds = new Set(validDocs.map(doc => doc.id))
+    setSelectedDocuments(allIds)
+    localStorage.setItem('selectedDocuments', JSON.stringify(Array.from(allIds)))
+  }
+
+  const clearSelection = () => {
+    setSelectedDocuments(new Set())
+    localStorage.setItem('selectedDocuments', JSON.stringify([]))
+  }
+
   const formatFileSize = (bytes: number) => {
     if (bytes === 0) return '0 Bytes'
     const k = 1024
@@ -234,6 +264,11 @@ export default function Documents() {
           <p className="text-gray-600 mt-1">
             Upload Formula Student rulebooks, guides, and reference materials
           </p>
+          {selectedDocuments.size > 0 && (
+            <p className="text-primary-600 text-sm mt-1">
+              {selectedDocuments.size} document{selectedDocuments.size !== 1 ? 's' : ''} selected for processing
+            </p>
+          )}
         </div>
       </div>
 
@@ -291,9 +326,29 @@ export default function Documents() {
 
       {/* Documents List */}
       <div className="card">
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">
-          Uploaded Documents ({documents.length})
-        </h2>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold text-gray-900">
+            Uploaded Documents ({documents.length})
+          </h2>
+          
+          {documents.length > 0 && (
+            <div className="flex items-center space-x-2">
+              <button
+                onClick={selectAllDocuments}
+                className="text-sm text-primary-600 hover:text-primary-700"
+              >
+                Select All Valid
+              </button>
+              <span className="text-gray-300">|</span>
+              <button
+                onClick={clearSelection}
+                className="text-sm text-gray-600 hover:text-gray-700"
+              >
+                Clear Selection
+              </button>
+            </div>
+          )}
+        </div>
         
         {documents.length === 0 ? (
           <div className="text-center py-8">
@@ -308,9 +363,24 @@ export default function Documents() {
             {documents.map((doc) => (
               <div
                 key={doc.id}
-                className="flex flex-col sm:flex-row sm:items-center justify-between p-3 sm:p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors space-y-3 sm:space-y-0"
+                className={`flex flex-col sm:flex-row sm:items-center justify-between p-3 sm:p-4 border-2 rounded-lg transition-colors space-y-3 sm:space-y-0 ${
+                  selectedDocuments.has(doc.id)
+                    ? 'border-primary-500 bg-primary-50'
+                    : 'border-gray-200 hover:bg-gray-50'
+                }`}
               >
-                <div className="flex items-start sm:items-center space-x-3 flex-1">
+                <div className="flex items-start sm:items-center space-x-3 flex-1" onClick={() => toggleDocumentSelection(doc.id)}>
+                  <button
+                    className={`flex-shrink-0 w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${
+                      selectedDocuments.has(doc.id)
+                        ? 'border-primary-500 bg-primary-500'
+                        : 'border-gray-300 hover:border-primary-400'
+                    }`}
+                  >
+                    {selectedDocuments.has(doc.id) && (
+                      <Check className="w-3 h-3 text-white" />
+                    )}
+                  </button>
                   <FileText className="w-8 h-8 text-primary-600 flex-shrink-0" />
                   <div className="flex-1 min-w-0">
                     <h3 className="font-medium text-gray-900 text-sm sm:text-base truncate">{doc.name}</h3>
