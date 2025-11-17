@@ -634,6 +634,27 @@ export default function Team() {
           <button onClick={leaveRoom} className="btn-secondary">
             Leave Room
           </button>
+          <button
+  onClick={() => {
+    console.log('🔄 Manual refresh triggered')
+    if (currentRoom) {
+      supabase
+        .from('team_rooms')
+        .select('*')
+        .eq('id', currentRoom.id)
+        .single()
+        .then(({ data, error }) => {
+          if (!error && data) {
+            console.log('✅ Manually refreshed room data')
+            setCurrentRoom(data as TeamRoom)
+          }
+        })
+    }
+  }}
+  className="btn-secondary"
+>
+  <RotateCcw className="w-4 h-4" />
+</button>
         </div>
 
         {/* Game Status */}
