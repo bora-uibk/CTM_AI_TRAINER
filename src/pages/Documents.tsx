@@ -1,4 +1,190 @@
-{
+import React, { useState, useEffect } from 'react'
+import { supabase } from '../lib/supabase'
+import { useAuth } from '../contexts/AuthContext'
+import { 
+  Upload, 
+  FileText, 
+  Download, 
+  Trash2, 
+  Loader, 
+  CheckCircle, 
+  AlertCircle,
+  Check,
+  Settings
+} from 'lucide-react'
+
+interface Document {
+  id: string
+  name: string
+  content: string
+  file_path: string
+  file_size: number
+  mime_type: string
+  uploaded_by: string
+  created_at: string
+  updated_at: string
+}
+
+interface Message {
+  type: 'success' | 'error'
+  text: string
+}
+
+export default function Documents() {
+  const { user } = useAuth()
+  const [documents, setDocuments] = useState<Document[]>([])
+  const [loading, setLoading] = useState(true)
+  const [uploading, setUploading] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState('')
+  const [message, setMessage] = useState<Message | null>(null)
+  const [selectedDocuments, setSelectedDocuments] = useState<Set<string>>(new Set())
+
+  useEffect(() => {
+    fetchDocuments()
+    loadSelectedDocuments()
+  }, [])
+
+  const loadSelectedDocuments = () => {
+    try {
+      const saved = localStorage.getItem('selectedDocuments')
+      if (saved) {
+        const parsed = JSON.parse(saved)
+        setSelectedDocuments(new Set(parsed))
+      }
+    } catch (error) {
+      console.error('Error loading selected documents:', error)
+    }
+  }
+
+  const fetchDocuments = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('documents')
+        .select('*')
+        .order('created_at', { ascending: false })
+
+      if (error) throw error
+      setDocuments(data || [])
+    } catch (error) {
+      console.error('Error fetching documents:', error)
+      showMessage('error', 'Failed to fetch documents')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const showMessage = (type: 'success' | 'error', text: string) => {
+    setMessage({ type, text })
+    setTimeout(() => setMessage(null), 5000)
+  }
+
+  const extractTextFromPDF = async (file: File): Promise<string> => {
+    return new Promise((resolve) => {
+      const reader = new FileReader()
+      reader.onload = async (e) => {
+        try {
+          const arrayBuffer = e.target?.result as ArrayBuffer
+          const uint8Array = new Uint8Array(arrayBuffer)
+          
+          // Simple text extraction - look for text between stream objects
+          const text = new TextDecoder().decode(uint8Array)
+          const textMatches = text.match(/stream\s*(.*?)\s*endstream/gs)
+          
+          if (textMatches) {
+            let extractedText = ''
+            textMatches.forEach(match => {
+              const content = match.replace(/stream\s*|\s*endstream/g, '')
+              // Basic cleanup of PDF encoding
+              const cleaned = content
+                .replace(/[^\x20-\x7E\n\r\t]/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim()
+              if (cleaned.length > 10) {
+                extractedText += cleaned + ' '
+              }
+            })
+            
+            if (extractedText.trim().length > 100) {
+              resolve(extractedText.trim())
+            } else {
+              resolve(`[PDF Document: ${file.name}] - Text extraction failed. Please ensure the PDF contains selectable text.`)
+            }
+          } else {
+            resolve(`[PDF Document: ${file.name}] - No readable text found. This may be a scanned document.`)
+          }
+        } catch (error) {
+          console.error('PDF text extraction error:', error)
+          resolve(`[PDF Document: ${file.name}] - Text extraction failed.`)
+        }
+      }
+      reader.readAsArrayBuffer(file)
+    })
+  }
+
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file || !user) return
+
+    // Validate file size (10MB limit)
+    if (file.size > 10 * 1024 * 1024) {
+      showMessage('error', 'File size must be less than 10MB')
+      event.target.value = ''
+      return
+    }
+
+    // Validate file type
+    const allowedTypes = ['application/pdf', 'text/plain']
+    if (!allowedTypes.includes(file.type)) {
+      showMessage('error', 'Only PDF and TXT files are supported')
+      event.target.value = ''
+      return
+    }
+
+    setUploading(true)
+    setUploadProgress('Preparing file...')
+
+    try {
+      // Extract text content
+      let textContent = ''
+      if (file.type === 'application/pdf') {
+        setUploadProgress('Extracting text from PDF...')
+        textContent = await extractTextFromPDF(file)
+      } else {
+        setUploadProgress('Reading text file...')
+        textContent = await file.text()
+      }
+
+      // Upload file to storage
+      setUploadProgress('Uploading file...')
+      const fileName = `${Date.now()}-${file.name}`
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from('documents')
+        .upload(fileName, file)
+
+      if (uploadError) throw uploadError
+
+      // Process document with edge function
+      setUploadProgress('Processing document...')
+      const { data: processData, error: processError } = await supabase.functions
+        .invoke('process-document', {
+          body: {
+            name: file.name,
+            content: textContent,
+            file_path: uploadData.path,
+            file_size: file.size,
+            mime_type: file.type,
+            uploaded_by: user.id
+          }
+        })
+
+      if (processError) throw processError
+
+      showMessage('success', 'Document uploaded and processed successfully!')
+      fetchDocuments()
+    } catch (error) {
+      console.error('Error uploading document:', error)
+      showMessage('error', 'Failed to upload document')
+    } finally {
       setUploading(false)
       setUploadProgress('')
       event.target.value = ''
