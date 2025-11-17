@@ -36,18 +36,17 @@ export default function Team() {
   }, [])
 
   useEffect(() => {
-    if (currentRoom) {
-      fetchParticipants()
-      subscribeToRoomUpdates()
-    }
+  if (currentRoom) {
+    fetchParticipants()
+    const unsubscribe = subscribeToRoomUpdates()
     
     return () => {
-      // Cleanup subscription when component unmounts or room changes
-      if (currentRoom) {
-        console.log('🧹 Cleaning up subscriptions for room:', currentRoom.id)
+      if (unsubscribe) {
+        unsubscribe()
       }
     }
-  }, [currentRoom])
+  }
+}, [currentRoom?.id]) // Only depend on currentRoom.id, not the entire object
 
   // Timer effect
   useEffect(() => {
@@ -98,63 +97,71 @@ export default function Team() {
   }
 
   const subscribeToRoomUpdates = () => {
-    if (!currentRoom) return () => {}
+  if (!currentRoom) return
 
-    console.log('🔔 Setting up real-time subscriptions for room:', currentRoom.id)
+  console.log('🔔 Setting up real-time subscriptions for room:', currentRoom.id)
 
-    // Subscribe to room updates
-    const roomSubscription = supabase
-      .channel(`room-${currentRoom.id}`)
-      .on('postgres_changes', {
-        event: '*',
+  // Create a single channel for all room updates
+  const channel = supabase
+    .channel(`room-updates-${currentRoom.id}`)
+    .on(
+      'postgres_changes',
+      {
+        event: 'UPDATE',
         schema: 'public',
         table: 'team_rooms',
         filter: `id=eq.${currentRoom.id}`
-      }, (payload) => {
-        console.log('🔄 Room update received:', payload.eventType, payload.new)
+      },
+      (payload) => {
+        console.log('🔄 Room update received:', payload)
         if (payload.new) {
           const updatedRoom = payload.new as TeamRoom
-          console.log('📝 Updating room state:', updatedRoom.room_status, updatedRoom.current_question_index)
+          console.log('📝 Updating room state:', {
+            status: updatedRoom.room_status,
+            questionIndex: updatedRoom.current_question_index,
+            currentTeam: updatedRoom.current_turn_team_id,
+            hasQuestion: !!updatedRoom.current_question
+          })
+          
+          // Update the current room state
           setCurrentRoom(updatedRoom)
+          
+          // Reset answer state when question changes
+          setSelectedAnswer(null)
           
           // Update timer when question changes
           if (updatedRoom.room_status === 'in_progress' && updatedRoom.current_question) {
             setTimeRemaining(updatedRoom.time_per_question)
             setTimerActive(true)
+          } else {
+            setTimerActive(false)
           }
         }
-      })
-      .on('postgres_changes', {
+      }
+    )
+    .on(
+      'postgres_changes',
+      {
         event: '*',
         schema: 'public',
         table: 'room_participants',
         filter: `room_id=eq.${currentRoom.id}`
-      }, () => {
-        console.log('👥 Participants updated, refetching...')
+      },
+      (payload) => {
+        console.log('👥 Participants changed:', payload.eventType)
         fetchParticipants()
-      })
-      .subscribe()
+      }
+    )
+    .subscribe((status) => {
+      console.log('📡 Subscription status:', status)
+    })
 
-    // Subscribe to participant updates
-    const participantSubscription = supabase
-      .channel(`participants-${currentRoom.id}`)
-      .on('postgres_changes', {
-        event: '*',
-        schema: 'public',
-        table: 'room_participants',
-        filter: `room_id=eq.${currentRoom.id}`
-      }, (payload) => {
-        console.log('👥 Participants updated:', payload.eventType)
-        fetchParticipants()
-      })
-      .subscribe()
-
-    // Return cleanup function
-    return () => {
-      roomSubscription.unsubscribe()
-      participantSubscription.unsubscribe()
-    }
+  // Return cleanup function
+  return () => {
+    console.log('🧹 Cleaning up subscription')
+    channel.unsubscribe()
   }
+}
 
   const createRoom = async () => {
     if (!roomName.trim() || !user) return
@@ -376,104 +383,139 @@ export default function Team() {
   }
 
   const checkTeamConsensus = async () => {
-    if (!currentRoom || !user) return
+  if (!currentRoom || !user) return
 
-    console.log('🤝 Checking team consensus...')
-    const currentTeamMembers = participants.filter(p => p.team_number === currentRoom.current_turn_team_id)
-    const currentAnswers = currentRoom.current_answers || {}
-    
-    // Get answers from current team members
-    const teamAnswers = currentTeamMembers
-      .map(member => currentAnswers[member.user_id])
-      .filter(answer => answer !== undefined)
+  console.log('🤝 Checking team consensus...')
+  const currentTeamMembers = participants.filter(p => p.team_number === currentRoom.current_turn_team_id)
+  const currentAnswers = currentRoom.current_answers || {}
+  
+  // Get answers from current team members
+  const teamAnswers = currentTeamMembers
+    .map(member => currentAnswers[member.user_id])
+    .filter(answer => answer !== undefined)
 
-    // Check if all team members have answered
-    if (teamAnswers.length === currentTeamMembers.length) {
-      // Check if all answers are the same
-      const firstAnswer = teamAnswers[0]?.answer
-      const allSame = teamAnswers.every(answer => answer.answer === firstAnswer)
+  console.log('📊 Team consensus check:', { 
+    teamAnswers: teamAnswers.length, 
+    totalMembers: currentTeamMembers.length,
+    answers: teamAnswers.map(a => a.answer)
+  })
 
-      console.log('📊 Team consensus check:', { teamAnswers: teamAnswers.length, totalMembers: currentTeamMembers.length, allSame })
+  // Check if all team members have answered
+  if (teamAnswers.length === currentTeamMembers.length && teamAnswers.length > 0) {
+    // Check if all answers are the same
+    const firstAnswer = teamAnswers[0]?.answer
+    const allSame = teamAnswers.every(answer => answer.answer === firstAnswer)
 
-      if (allSame) {
-        // Consensus reached, advance to next question
-        console.log('✅ Consensus reached, advancing to next question')
-        await advanceToNextQuestion(firstAnswer)
-      }
+    console.log('🎯 Consensus result:', { allSame, firstAnswer })
+
+    if (allSame) {
+      // Consensus reached, advance to next question
+      console.log('✅ Consensus reached, advancing to next question')
+      // Add a small delay to ensure all clients see the consensus message
+      setTimeout(() => {
+        advanceToNextQuestion(firstAnswer)
+      }, 500)
     }
   }
+}
 
   const advanceToNextQuestion = async (teamAnswer: string | number) => {
-    if (!currentRoom) return
+  if (!currentRoom) return
 
-    console.log('⏭️ Advancing to next question with answer:', teamAnswer)
-    try {
-      const currentTeam = currentRoom.current_turn_team_id
-      const currentQuestion = currentRoom.current_question as QuizQuestion
-      const isCorrect = teamAnswer === currentQuestion.correct_answer
+  console.log('⏭️ Advancing to next question with answer:', teamAnswer)
+  try {
+    const currentTeam = currentRoom.current_turn_team_id
+    const currentQuestion = currentRoom.current_question as QuizQuestion
+    const isCorrect = teamAnswer === currentQuestion.correct_answer
 
-      // Update team score
-      const teamScores = { ...currentRoom.team_scores }
-      if (isCorrect) {
-        teamScores[currentTeam.toString()] = (teamScores[currentTeam.toString()] || 0) + 1
-      }
+    // Update team score
+    const teamScores = { ...currentRoom.team_scores }
+    if (isCorrect) {
+      teamScores[currentTeam.toString()] = (teamScores[currentTeam.toString()] || 0) + 1
+    }
 
-      // Determine next state
-      let nextTeam = currentTeam
-      let nextQuestionIndex = currentRoom.current_question_index
-      let nextQuestion = null
-      let roomStatus = currentRoom.room_status
+    // Determine next state
+    let nextTeam = currentTeam
+    let nextQuestionIndex = currentRoom.current_question_index
+    let nextQuestion = null
+    let roomStatus = currentRoom.room_status
 
-      // Move to next team
-      nextTeam = (currentTeam % currentRoom.num_teams) + 1
+    // Move to next team
+    nextTeam = (currentTeam % currentRoom.num_teams) + 1
+    
+    // If we've cycled through all teams, move to next question index
+    if (nextTeam === 1) {
+      nextQuestionIndex++
+    }
+
+    console.log('📊 Next state:', { nextTeam, nextQuestionIndex })
+
+    // Check if game is finished
+    if (nextQuestionIndex >= currentRoom.questions_per_team) {
+      console.log('🏁 Game finished!')
       
-      // If we've cycled through all teams, move to next question index
-      if (nextTeam === 1) {
-        nextQuestionIndex++
+      const { error } = await supabase
+        .from('team_rooms')
+        .update({
+          room_status: 'finished',
+          is_active: false,
+          team_scores: teamScores,
+          current_answers: {},
+          updated_at: new Date().toISOString() // Force timestamp update
+        })
+        .eq('id', currentRoom.id)
+
+      if (error) {
+        console.error('❌ Error updating room to finished:', error)
+        throw error
+      }
+    } else {
+      // Get next question for the next team
+      const teamQuestions = currentRoom.team_questions[nextTeam.toString()] || []
+      if (nextQuestionIndex < teamQuestions.length) {
+        nextQuestion = teamQuestions[nextQuestionIndex]
       }
 
-      // Check if game is finished
-      const maxQuestions = Math.max(...Object.values(currentRoom.team_questions).map((q: any) => q.length))
-      if (nextQuestionIndex >= maxQuestions) {
-        console.log('🏁 Game finished!')
-        roomStatus = 'finished'
-        await supabase
-          .from('team_rooms')
-          .update({
-            room_status: 'finished',
-            is_active: false,
-            team_scores: teamScores,
-            current_answers: {}
-          })
-          .eq('id', currentRoom.id)
-      } else {
-        // Get next question for the next team
-        console.log('📋 Getting next question for team:', nextTeam, 'question index:', nextQuestionIndex)
-        const teamQuestions = currentRoom.team_questions[nextTeam.toString()] || []
-        if (nextQuestionIndex < teamQuestions.length) {
-          nextQuestion = teamQuestions[nextQuestionIndex]
-        }
+      console.log('📋 Next question:', nextQuestion ? 'Found' : 'Not found')
 
-        await supabase
-          .from('team_rooms')
-          .update({
-            current_turn_team_id: nextTeam,
-            current_question_index: nextQuestionIndex,
-            current_question: nextQuestion,
-            current_answers: {},
-            team_scores: teamScores
-          })
-          .eq('id', currentRoom.id)
+      const { error } = await supabase
+        .from('team_rooms')
+        .update({
+          current_turn_team_id: nextTeam,
+          current_question_index: nextQuestionIndex,
+          current_question: nextQuestion,
+          current_answers: {},
+          team_scores: teamScores,
+          updated_at: new Date().toISOString() // Force timestamp update
+        })
+        .eq('id', currentRoom.id)
+
+      if (error) {
+        console.error('❌ Error advancing question:', error)
+        throw error
       }
 
       console.log('✅ Question advanced successfully')
+    }
+
+    // Manually fetch the updated room to ensure we have the latest state
+    const { data: updatedRoom, error: fetchError } = await supabase
+      .from('team_rooms')
+      .select('*')
+      .eq('id', currentRoom.id)
+      .single()
+
+    if (!fetchError && updatedRoom) {
+      console.log('🔄 Manually updating room state after advance')
+      setCurrentRoom(updatedRoom as TeamRoom)
       setSelectedAnswer(null)
       setTimerActive(false)
       setTimeRemaining(0)
-    } catch (error) {
-      console.error('Error advancing question:', error)
     }
+  } catch (error) {
+    console.error('❌ Error advancing question:', error)
   }
+}
 
   const handleTimeUp = async () => {
     if (!currentRoom) return
