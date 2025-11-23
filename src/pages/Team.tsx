@@ -50,118 +50,63 @@ export default function Team() {
 
   // Timer effect
   useEffect(() => {
-    let interval: NodeJS.Timeout
-    if (timerActive && timeRemaining > 0) {
-      interval = setInterval(() => {
-        setTimeRemaining(prev => {
-          if (prev <= 1) {
-            handleTimeUp()
-            return 0
-          }
-          return prev - 1
-        })
-      }, 1000)
-    }
-    return () => clearInterval(interval)
-  }, [timerActive, timeRemaining])
+  if (currentRoom?.id) {
+    // Fetch immediately
+    fetchParticipants(currentRoom.id)
 
-  const fetchRooms = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('team_rooms')
-        .select('*')
-        .eq('is_active', true)
-        .order('created_at', { ascending: false })
-
-      if (error) throw error
-      setRooms(data || [])
-    } catch (error) {
-      console.error('Error fetching rooms:', error)
-    }
-  }
-
-  const fetchParticipants = async () => {
-    if (!currentRoom) return
-
-    try {
-      const { data, error } = await supabase
-        .from('room_participants')
-        .select('*')
-        .eq('room_id', currentRoom.id)
-
-      if (error) throw error
-      setParticipants(data || [])
-    } catch (error) {
-      console.error('Error fetching participants:', error)
-    }
-  }
-
-  const subscribeToRoomUpdates = () => {
-  if (!currentRoom) return
-
-  console.log('🔔 Setting up real-time subscriptions for room:', currentRoom.id)
-
-  // Create a single channel for all room updates
-  const channel = supabase
-    .channel(`room-updates-${currentRoom.id}`)
-    .on(
-      'postgres_changes',
-      {
-        event: 'UPDATE',
-        schema: 'public',
-        table: 'team_rooms',
-        filter: `id=eq.${currentRoom.id}`
-      },
-      (payload) => {
-        console.log('🔄 Room update received:', payload)
-        if (payload.new) {
-          const updatedRoom = payload.new as TeamRoom
-          console.log('📝 Updating room state:', {
-            status: updatedRoom.room_status,
-            questionIndex: updatedRoom.current_question_index,
-            currentTeam: updatedRoom.current_turn_team_id,
-            hasQuestion: !!updatedRoom.current_question
-          })
-          
-          // Update the current room state
-          setCurrentRoom(updatedRoom)
-          
-          // Reset answer state when question changes
-          setSelectedAnswer(null)
-          
-          // Update timer when question changes
-          if (updatedRoom.room_status === 'in_progress' && updatedRoom.current_question) {
-            setTimeRemaining(updatedRoom.time_per_question)
-            setTimerActive(true)
-          } else {
-            setTimerActive(false)
+    // Setup subscription
+    const channel = supabase
+      .channel(`room-updates-${currentRoom.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'team_rooms',
+          filter: `id=eq.${currentRoom.id}`
+        },
+        (payload) => {
+          console.log('🔄 Room update received:', payload)
+          if (payload.new) {
+            const updatedRoom = payload.new as TeamRoom
+            
+            // IMPORTANT: Functional state update prevents some race conditions
+            setCurrentRoom(prev => ({ ...prev, ...updatedRoom }))
+            
+            // Handle timer logic based on the NEW payload, not state
+            if (updatedRoom.room_status === 'in_progress' && updatedRoom.current_question) {
+               // Only reset timer if the question actually changed
+               // You might need logic here to compare previous index
+               setTimeRemaining(updatedRoom.time_per_question)
+               setTimerActive(true)
+            }
           }
         }
-      }
-    )
-    .on(
-      'postgres_changes',
-      {
-        event: '*',
-        schema: 'public',
-        table: 'room_participants',
-        filter: `room_id=eq.${currentRoom.id}`
-      },
-      (payload) => {
-        console.log('👥 Participants changed:', payload.eventType)
-        fetchParticipants()
-      }
-    )
-    .subscribe((status) => {
-      console.log('📡 Subscription status:', status)
-    })
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*', // Listen to INSERT, UPDATE, DELETE
+          schema: 'public',
+          table: 'room_participants',
+          filter: `room_id=eq.${currentRoom.id}`
+        },
+        (payload) => {
+          console.log('👥 Participants changed:', payload)
+          // Pass the ID explicitly so we don't rely on stale state
+          fetchParticipants(currentRoom.id)
+        }
+      )
+      .subscribe((status, err) => {
+        console.log('📡 Subscription status:', status, err)
+      })
 
-  // Return cleanup function
-  return () => {
-    console.log('🧹 Cleaning up subscription')
-    channel.unsubscribe()
+    return () => {
+      console.log('🧹 Cleaning up subscription')
+      supabase.removeChannel(channel)
+    }
   }
-}
+}, [currentRoom?.id]) // Dependency ensures this runs when ID changes
 
   const createRoom = async () => {
     if (!roomName.trim() || !user) return
