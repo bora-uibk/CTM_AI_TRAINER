@@ -1028,26 +1028,40 @@ export default function Team() {
                     disabled={loading || !roomName.trim()}
                     className="btn-primary flex-1"
                   >
-                    {loading ? <Loader className="w-4 h-4 animate-spin" /> : 'Create'}
-                  </button>
-                  <button
-                    onClick={() => setShowCreateRoom(false)}
-                    className="btn-secondary"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <button
-                onClick={() => setShowCreateRoom(true)}
-                className="btn-primary"
-              >
-                Create Room
-              </button>
-            )}
-          </div>
-        </div>
+                    {loading ? (
+  <Loader className="w-4 h-4 animate-spin" />
+) : (
+  <>
+    <Plus className="w-4 h-4 mr-2" />
+    Create
+  </>
+)}
+</button>
+
+<button
+  onClick={() => setShowCreateRoom(false)}
+  className="btn-secondary flex-1"
+>
+  Cancel
+</button>
+</div>
+) : (
+  <button
+    onClick={() => setShowCreateRoom(true)}
+    className="btn-primary w-full"
+  >
+    Create Room
+  </button>
+)}
+
+</div>
+</div>
+</div>
+);
+}
+
+export default GameRooms;
+
 
         {/* Join Room */}
         <div className="card">
