@@ -28,7 +28,6 @@ export default function Team() {
 
   useEffect(() => {
     fetchRooms()
-    // Load selected documents from localStorage
     const saved = localStorage.getItem('selectedDocuments')
     if (saved) {
       setSelectedDocuments(new Set(JSON.parse(saved)))
@@ -47,6 +46,19 @@ export default function Team() {
       }
     }
   }, [currentRoom?.id])
+
+  // --- NEW: THE GAME ENGINE EFFECT ---
+  // This watches the room state. If you are the creator, you act as the "Server"
+  // checking if the current team has finished their turn.
+  useEffect(() => {
+    if (!currentRoom || !user || currentRoom.room_status !== 'in_progress') return
+
+    // Only the Creator (Host) is allowed to advance the game state
+    // This prevents RLS (Permission) errors from non-creators trying to update the room
+    if (currentRoom.created_by === user.id) {
+        checkTeamConsensus()
+    }
+  }, [currentRoom, participants]) // Run whenever room data or participants change
 
   // Timer effect
   useEffect(() => {
@@ -99,9 +111,6 @@ export default function Team() {
   const subscribeToRoomUpdates = () => {
     if (!currentRoom) return
   
-    console.log('🔔 Setting up real-time subscriptions for room:', currentRoom.id)
-  
-    // Create a single channel for all room updates
     const channel = supabase
       .channel(`room-updates-${currentRoom.id}`)
       .on(
@@ -113,25 +122,29 @@ export default function Team() {
           filter: `id=eq.${currentRoom.id}`
         },
         (payload) => {
-          console.log('🔄 Room update received:', payload)
           if (payload.new) {
             const updatedRoom = payload.new as TeamRoom
             setCurrentRoom(updatedRoom)
             
-            // Reset answer state when question changes
-            setSelectedAnswer(null)
+            // Only reset answer selection if the question actually changed
+            // We check this by comparing the question index or the question string
+            if (updatedRoom.current_question_index !== currentRoom.current_question_index || 
+                updatedRoom.current_turn_team_id !== currentRoom.current_turn_team_id) {
+                 setSelectedAnswer(null)
+            }
             
-            // Update timer when question changes
             if (updatedRoom.room_status === 'in_progress' && updatedRoom.current_question) {
-              setTimeRemaining(updatedRoom.time_per_question)
-              setTimerActive(true)
+               // Only reset timer if question changed
+               if (updatedRoom.current_question_index !== currentRoom.current_question_index) {
+                   setTimeRemaining(updatedRoom.time_per_question)
+                   setTimerActive(true)
+               }
             } else {
               setTimerActive(false)
             }
           }
         }
       )
-      // NEW: Listen for DELETE events (Room deleted by host)
       .on(
         'postgres_changes',
         {
@@ -141,7 +154,6 @@ export default function Team() {
           filter: `id=eq.${currentRoom.id}`
         },
         () => {
-           console.log('❌ Room was deleted')
            alert('The room has been closed by the host.')
            setCurrentRoom(null)
            setParticipants([])
@@ -157,17 +169,12 @@ export default function Team() {
           filter: `room_id=eq.${currentRoom.id}`
         },
         (payload) => {
-          console.log('👥 Participants changed:', payload.eventType)
           fetchParticipants()
         }
       )
-      .subscribe((status) => {
-        console.log('📡 Subscription status:', status)
-      })
+      .subscribe()
   
-    // Return cleanup function
     return () => {
-      console.log('🧹 Cleaning up subscription')
       channel.unsubscribe()
     }
   }
@@ -202,7 +209,6 @@ export default function Team() {
 
       if (error) throw error
 
-      // Join the room as creator (Team 1)
       await supabase
         .from('room_participants')
         .insert({
@@ -223,32 +229,20 @@ export default function Team() {
     }
   }
 
-  // --- NEW DELETE ROOM FUNCTION ---
   const deleteRoom = async (roomId: string) => {
     if (!user) return
-    
-    // Confirm deletion
-    if (!window.confirm("Are you sure you want to delete this room? This cannot be undone.")) {
-      return
-    }
+    if (!window.confirm("Are you sure you want to delete this room?")) return
 
     setLoading(true)
     try {
-      // Supabase cascade delete should handle participants if configured, 
-      // otherwise explicit deletion might be needed. 
-      // Assuming 'team_rooms' deletion is sufficient here.
       const { error } = await supabase
         .from('team_rooms')
         .delete()
         .eq('id', roomId)
-        .eq('created_by', user.id) // Security check
+        .eq('created_by', user.id)
 
       if (error) throw error
-
-      // Update local state
       setRooms(prevRooms => prevRooms.filter(room => room.id !== roomId))
-      
-      // If we were inside the room, leave it
       if (currentRoom?.id === roomId) {
         setCurrentRoom(null)
         setParticipants([])
@@ -275,7 +269,6 @@ export default function Team() {
 
       if (roomError) throw new Error('Room not found')
 
-      // Check if already joined
       const { data: existing } = await supabase
         .from('room_participants')
         .select('*')
@@ -330,9 +323,7 @@ export default function Team() {
 
     setLoading(true)
     try {
-      // Generate questions for all teams
       const totalQuestions = currentRoom.num_teams * currentRoom.questions_per_team
-      console.log('🎯 Generating questions:', { totalQuestions, numTeams: currentRoom.num_teams, questionsPerTeam: currentRoom.questions_per_team })
       
       const { data, error } = await supabase.functions.invoke('generate-quiz', {
         body: { 
@@ -341,41 +332,21 @@ export default function Team() {
         }
       })
 
-      if (error) {
-        console.error('❌ Quiz generation error:', error)
-        throw error
-      }
+      if (error) throw error
+      if (!data || !data.questions) throw new Error('Invalid quiz generation response')
 
-      console.log('✅ Quiz generation response:', data)
-
-      if (!data || !data.questions || !Array.isArray(data.questions)) {
-        throw new Error('Invalid quiz generation response')
-      }
-
-      // Distribute questions among teams
       const teamQuestions: Record<string, QuizQuestion[]> = {}
       const teamScores: Record<string, number> = {}
       
       for (let i = 1; i <= currentRoom.num_teams; i++) {
         const startIndex = (i - 1) * currentRoom.questions_per_team
         const endIndex = i * currentRoom.questions_per_team
-        teamQuestions[i.toString()] = data.questions.slice(
-          startIndex,
-          endIndex
-        )
+        teamQuestions[i.toString()] = data.questions.slice(startIndex, endIndex)
         teamScores[i.toString()] = 0
-        console.log(`📋 Team ${i} questions:`, teamQuestions[i.toString()].length)
       }
 
-      // Get the first question for team 1
       const firstQuestion = teamQuestions['1'][0]
-      if (!firstQuestion) {
-        throw new Error('No questions available for team 1')
-      }
 
-      console.log('🚀 Starting game with first question:', firstQuestion)
-
-      // Start the game
       const { error: updateError } = await supabase
         .from('team_rooms')
         .update({
@@ -389,12 +360,8 @@ export default function Team() {
         })
         .eq('id', currentRoom.id)
 
-      if (updateError) {
-        console.error('❌ Room update error:', updateError)
-        throw updateError
-      }
+      if (updateError) throw updateError
 
-      console.log('✅ Game started successfully')
       setSelectedAnswer(null)
       setTimeRemaining(currentRoom.time_per_question)
       setTimerActive(true)
@@ -417,159 +384,116 @@ export default function Team() {
         team_number: participants.find(p => p.user_id === user.id)?.team_number
       }
 
+      // NOTE: We only update the answers here. 
+      // The "advanceToNextQuestion" logic is now handled in the useEffect
+      // that watches for room updates.
       await supabase
         .from('team_rooms')
         .update({ current_answers: currentAnswers })
         .eq('id', currentRoom.id)
 
-      // Check if all team members have answered with the same answer
-      checkTeamConsensus()
     } catch (error) {
       console.error('Error submitting answer:', error)
     }
   }
 
   const checkTeamConsensus = async () => {
-  if (!currentRoom || !user) return
+    if (!currentRoom) return
 
-  console.log('🤝 Checking team consensus...')
-  const currentTeamMembers = participants.filter(p => p.team_number === currentRoom.current_turn_team_id)
-  const currentAnswers = currentRoom.current_answers || {}
-  
-  // Get answers from current team members
-  const teamAnswers = currentTeamMembers
-    .map(member => currentAnswers[member.user_id])
-    .filter(answer => answer !== undefined)
+    // Get current team's members
+    const currentTeamMembers = participants.filter(p => p.team_number === currentRoom.current_turn_team_id)
+    if (currentTeamMembers.length === 0) return // Should not happen
 
-  console.log('📊 Team consensus check:', { 
-    teamAnswers: teamAnswers.length, 
-    totalMembers: currentTeamMembers.length,
-    answers: teamAnswers.map(a => a.answer)
-  })
+    const currentAnswers = currentRoom.current_answers || {}
+    
+    // Get answers from current team members
+    const teamAnswers = currentTeamMembers
+        .map(member => currentAnswers[member.user_id])
+        .filter(answer => answer !== undefined)
 
-  // Check if all team members have answered
-  if (teamAnswers.length === currentTeamMembers.length && teamAnswers.length > 0) {
-    // Check if all answers are the same
-    const firstAnswer = teamAnswers[0]?.answer
-    const allSame = teamAnswers.every(answer => answer.answer === firstAnswer)
+    // 1. Check if all members answered
+    if (teamAnswers.length === currentTeamMembers.length && teamAnswers.length > 0) {
+        // 2. Check if all answers are the same
+        const firstAnswer = teamAnswers[0]?.answer
+        const allSame = teamAnswers.every(answer => answer.answer === firstAnswer)
 
-    console.log('🎯 Consensus result:', { allSame, firstAnswer })
-
-    if (allSame) {
-      // Consensus reached, advance to next question
-      console.log('✅ Consensus reached, advancing to next question')
-      // Add a small delay to ensure all clients see the consensus message
-      setTimeout(() => {
-        advanceToNextQuestion(firstAnswer)
-      }, 500)
+        if (allSame) {
+            console.log('✅ Consensus reached detected by Host')
+            // Add a small delay for UX so players see the result briefly
+            setTimeout(() => {
+                advanceToNextQuestion(firstAnswer)
+            }, 1000)
+        }
     }
   }
-}
 
   const advanceToNextQuestion = async (teamAnswer: string | number) => {
-  if (!currentRoom) return
+    // Double check: Only creator runs this
+    if (!currentRoom || currentRoom.created_by !== user?.id) return
 
-  console.log('⏭️ Advancing to next question with answer:', teamAnswer)
-  try {
-    const currentTeam = currentRoom.current_turn_team_id
-    const currentQuestion = currentRoom.current_question as QuizQuestion
-    const isCorrect = teamAnswer === currentQuestion.correct_answer
+    console.log('⏭️ Advancing to next question...')
+    try {
+        const currentTeam = currentRoom.current_turn_team_id
+        const currentQuestion = currentRoom.current_question as QuizQuestion
+        const isCorrect = teamAnswer === currentQuestion.correct_answer
 
-    // Update team score
-    const teamScores = { ...currentRoom.team_scores }
-    if (isCorrect) {
-      teamScores[currentTeam.toString()] = (teamScores[currentTeam.toString()] || 0) + 1
-    }
+        // Update score
+        const teamScores = { ...currentRoom.team_scores }
+        if (isCorrect) {
+        teamScores[currentTeam.toString()] = (teamScores[currentTeam.toString()] || 0) + 1
+        }
 
-    // Determine next state
-    let nextTeam = currentTeam
-    let nextQuestionIndex = currentRoom.current_question_index
-    let nextQuestion = null
-    let roomStatus = currentRoom.room_status
+        // Calculate next state
+        let nextTeam = (currentTeam % currentRoom.num_teams) + 1
+        let nextQuestionIndex = currentRoom.current_question_index
+        
+        // If cycled back to Team 1, increment question index
+        if (nextTeam === 1) {
+            nextQuestionIndex++
+        }
 
-    // Move to next team
-    nextTeam = (currentTeam % currentRoom.num_teams) + 1
-    
-    // If we've cycled through all teams, move to next question index
-    if (nextTeam === 1) {
-      nextQuestionIndex++
-    }
+        // Check if finished
+        if (nextQuestionIndex >= currentRoom.questions_per_team) {
+            await supabase
+                .from('team_rooms')
+                .update({
+                    room_status: 'finished',
+                    is_active: false,
+                    team_scores: teamScores,
+                    current_answers: {},
+                    updated_at: new Date().toISOString()
+                })
+                .eq('id', currentRoom.id)
+        } else {
+            // Get next question
+            const teamQuestions = currentRoom.team_questions[nextTeam.toString()] || []
+            const nextQuestion = teamQuestions[nextQuestionIndex]
 
-    console.log('📊 Next state:', { nextTeam, nextQuestionIndex })
-
-    // Check if game is finished
-    if (nextQuestionIndex >= currentRoom.questions_per_team) {
-      console.log('🏁 Game finished!')
-      
-      const { error } = await supabase
-        .from('team_rooms')
-        .update({
-          room_status: 'finished',
-          is_active: false,
-          team_scores: teamScores,
-          current_answers: {},
-          updated_at: new Date().toISOString() // Force timestamp update
-        })
-        .eq('id', currentRoom.id)
-
-      if (error) {
-        console.error('❌ Error updating room to finished:', error)
-        throw error
-      }
-    } else {
-      // Get next question for the next team
-      const teamQuestions = currentRoom.team_questions[nextTeam.toString()] || []
-      if (nextQuestionIndex < teamQuestions.length) {
-        nextQuestion = teamQuestions[nextQuestionIndex]
-      }
-
-      console.log('📋 Next question:', nextQuestion ? 'Found' : 'Not found')
-
-      const { error } = await supabase
-        .from('team_rooms')
-        .update({
-          current_turn_team_id: nextTeam,
-          current_question_index: nextQuestionIndex,
-          current_question: nextQuestion,
-          current_answers: {},
-          team_scores: teamScores,
-          updated_at: new Date().toISOString() // Force timestamp update
-        })
-        .eq('id', currentRoom.id)
-
-      if (error) {
+            await supabase
+                .from('team_rooms')
+                .update({
+                    current_turn_team_id: nextTeam,
+                    current_question_index: nextQuestionIndex,
+                    current_question: nextQuestion,
+                    current_answers: {}, // Clear answers for next turn
+                    team_scores: teamScores,
+                    updated_at: new Date().toISOString()
+                })
+                .eq('id', currentRoom.id)
+        }
+    } catch (error) {
         console.error('❌ Error advancing question:', error)
-        throw error
-      }
-
-      console.log('✅ Question advanced successfully')
     }
-
-    // Manually fetch the updated room to ensure we have the latest state
-    const { data: updatedRoom, error: fetchError } = await supabase
-      .from('team_rooms')
-      .select('*')
-      .eq('id', currentRoom.id)
-      .single()
-
-    if (!fetchError && updatedRoom) {
-      console.log('🔄 Manually updating room state after advance')
-      setCurrentRoom(updatedRoom as TeamRoom)
-      setSelectedAnswer(null)
-      setTimerActive(false)
-      setTimeRemaining(0)
-    }
-  } catch (error) {
-    console.error('❌ Error advancing question:', error)
   }
-}
 
   const handleTimeUp = async () => {
     if (!currentRoom) return
-
     setTimerActive(false)
-    // Time's up - treat as PASS and move to next question
-    await advanceToNextQuestion('PASS')
+    
+    // Only creator handles time up
+    if (user?.id === currentRoom.created_by) {
+        await advanceToNextQuestion('PASS')
+    }
   }
 
   const formatTime = (seconds: number) => {
@@ -578,6 +502,7 @@ export default function Team() {
     return `${mins}:${secs.toString().padStart(2, '0')}`
   }
 
+  // --- RENDER HELPERS ---
   const isRoomCreator = currentRoom?.created_by === user?.id
   const currentQuestion = currentRoom?.current_question as QuizQuestion | null
   const currentAnswers = currentRoom?.current_answers || {}
@@ -585,18 +510,17 @@ export default function Team() {
   const isUserTurn = userParticipant?.team_number === currentRoom?.current_turn_team_id
   const hasAnswered = user?.id && currentAnswers[user.id]
 
-  // Get team members for current turn
+  // Visualization logic
   const currentTeamMembers = participants.filter(p => p.team_number === currentRoom?.current_turn_team_id)
   const teamAnswers = currentTeamMembers
     .map(member => currentAnswers[member.user_id])
     .filter(answer => answer !== undefined)
-
-  // Check consensus
   const allTeamMembersAnswered = teamAnswers.length === currentTeamMembers.length
   const firstAnswer = teamAnswers[0]?.answer
   const hasConsensus = allTeamMembersAnswered && teamAnswers.every(answer => answer.answer === firstAnswer)
 
-  // Room finished - show results
+  // --- VIEWS ---
+
   if (currentRoom?.room_status === 'finished') {
     const teamScores = currentRoom.team_scores || {}
     const sortedTeams = Object.entries(teamScores)
@@ -611,62 +535,29 @@ export default function Team() {
 
         <div className="card">
           <h2 className="text-xl font-semibold text-gray-900 mb-6 text-center">Final Results</h2>
-          
           <div className="space-y-4">
             {sortedTeams.map(([teamId, score], index) => {
               const teamMembers = participants.filter(p => p.team_number === parseInt(teamId))
               const isWinner = index === 0
-              
               return (
-                <div
-                  key={teamId}
-                  className={`p-4 rounded-lg border-2 ${
-                    isWinner 
-                      ? 'border-yellow-400 bg-yellow-50' 
-                      : 'border-gray-200 bg-gray-50'
-                  }`}
-                >
+                <div key={teamId} className={`p-4 rounded-lg border-2 ${isWinner ? 'border-yellow-400 bg-yellow-50' : 'border-gray-200 bg-gray-50'}`}>
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center space-x-2">
                       {isWinner && <Crown className="w-5 h-5 text-yellow-500" />}
-                      <h3 className="font-semibold text-gray-900">
-                        Team {teamId} {isWinner && '🏆'}
-                      </h3>
+                      <h3 className="font-semibold text-gray-900">Team {teamId} {isWinner && '🏆'}</h3>
                     </div>
-                    <div className="text-2xl font-bold text-primary-600">
-                      {score}/{currentRoom.questions_per_team}
-                    </div>
+                    <div className="text-2xl font-bold text-primary-600">{score}/{currentRoom.questions_per_team}</div>
                   </div>
-                  
-                  <div className="text-sm text-gray-600">
-                    Members: {teamMembers.map(m => m.user_email).join(', ')}
-                  </div>
-                  
-                  <div className="mt-2">
-                    <div className="w-full bg-gray-200 rounded-full h-2">
-                      <div 
-                        className={`h-2 rounded-full ${
-                          isWinner ? 'bg-yellow-500' : 'bg-primary-500'
-                        }`}
-                        style={{ 
-                          width: `${((score as number) / currentRoom.questions_per_team) * 100}%` 
-                        }}
-                      />
-                    </div>
-                  </div>
+                  <div className="text-sm text-gray-600">Members: {teamMembers.map(m => m.user_email).join(', ')}</div>
                 </div>
               )
             })}
           </div>
-
           <div className="mt-8 text-center flex justify-center space-x-4">
-            <button onClick={leaveRoom} className="btn-primary">
-              Leave Room
-            </button>
+            <button onClick={leaveRoom} className="btn-primary">Leave Room</button>
             {isRoomCreator && (
               <button onClick={() => deleteRoom(currentRoom.id)} className="btn-secondary text-red-600 border-red-200 hover:bg-red-50">
-                <Trash2 className="w-4 h-4 mr-2" />
-                Delete Room
+                <Trash2 className="w-4 h-4 mr-2" /> Delete Room
               </button>
             )}
           </div>
@@ -675,7 +566,6 @@ export default function Team() {
     )
   }
 
-  // Game in progress
   if (currentRoom && currentRoom.room_status === 'in_progress') {
     return (
       <div className="max-w-4xl mx-auto space-y-6 px-4">
@@ -685,43 +575,18 @@ export default function Team() {
             <p className="text-gray-600">Room Code: <span className="font-mono font-bold">{currentRoom.code}</span></p>
           </div>
           <div className="flex space-x-2">
-            <button onClick={leaveRoom} className="btn-secondary">
-                Leave Room
-            </button>
+            <button onClick={leaveRoom} className="btn-secondary">Leave Room</button>
             {isRoomCreator && (
-              <button 
-                onClick={() => deleteRoom(currentRoom.id)} 
-                className="p-2 border border-red-200 rounded-lg text-red-600 hover:bg-red-50 transition-colors"
-                title="Delete Room"
-              >
+              <button onClick={() => deleteRoom(currentRoom.id)} className="p-2 border border-red-200 rounded-lg text-red-600 hover:bg-red-50">
                 <Trash2 className="w-4 h-4" />
               </button>
             )}
-            <button
-                onClick={() => {
-                    console.log('🔄 Manual refresh triggered')
-                    if (currentRoom) {
-                    supabase
-                        .from('team_rooms')
-                        .select('*')
-                        .eq('id', currentRoom.id)
-                        .single()
-                        .then(({ data, error }) => {
-                        if (!error && data) {
-                            console.log('✅ Manually refreshed room data')
-                            setCurrentRoom(data as TeamRoom)
-                        }
-                        })
-                    }
-                }}
-                className="btn-secondary"
-            >
-                <RotateCcw className="w-4 h-4" />
-            </button>
+            <button onClick={() => {
+                if(currentRoom) supabase.from('team_rooms').select('*').eq('id', currentRoom.id).single().then(({data}) => data && setCurrentRoom(data as TeamRoom))
+            }} className="btn-secondary"><RotateCcw className="w-4 h-4" /></button>
           </div>
         </div>
 
-        {/* Game Status */}
         <div className="card">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between space-y-4 sm:space-y-0">
             <div className="flex items-center space-x-4">
@@ -730,19 +595,14 @@ export default function Team() {
                 <div className="text-sm text-gray-600">Current Turn</div>
               </div>
               <div className="text-center">
-                <div className="text-2xl font-bold text-gray-900">
-                  {currentRoom.current_question_index + 1}/{currentRoom.questions_per_team}
-                </div>
+                <div className="text-2xl font-bold text-gray-900">{currentRoom.current_question_index + 1}/{currentRoom.questions_per_team}</div>
                 <div className="text-sm text-gray-600">Question</div>
               </div>
             </div>
-            
             {timerActive && (
               <div className="flex items-center space-x-2">
                 <Timer className={`w-5 h-5 ${timeRemaining < 10 ? 'text-danger-600' : 'text-primary-600'}`} />
-                <span className={`text-2xl font-mono font-bold ${
-                  timeRemaining < 10 ? 'text-danger-600' : 'text-primary-600'
-                }`}>
+                <span className={`text-2xl font-mono font-bold ${timeRemaining < 10 ? 'text-danger-600' : 'text-primary-600'}`}>
                   {formatTime(timeRemaining)}
                 </span>
               </div>
@@ -751,7 +611,6 @@ export default function Team() {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Question Area */}
           <div className="lg:col-span-2">
             <div className="card">
               {currentQuestion ? (
@@ -759,15 +618,11 @@ export default function Team() {
                   <div className="mb-4">
                     <div className="flex items-center space-x-2 mb-2">
                       <Target className="w-5 h-5 text-primary-600" />
-                      <span className="font-medium text-primary-600">
-                        Team {currentRoom.current_turn_team_id}'s Question
-                      </span>
+                      <span className="font-medium text-primary-600">Team {currentRoom.current_turn_team_id}'s Question</span>
                     </div>
                     {!isUserTurn && (
                       <div className="p-3 bg-gray-100 rounded-lg mb-4">
-                        <p className="text-gray-600 text-center">
-                          Waiting for Team {currentRoom.current_turn_team_id} to answer...
-                        </p>
+                        <p className="text-gray-600 text-center">Waiting for Team {currentRoom.current_turn_team_id} to answer...</p>
                       </div>
                     )}
                   </div>
@@ -832,21 +687,14 @@ export default function Team() {
                     )}
                   </div>
 
-                  {/* Team Consensus Status */}
                   {isUserTurn && (
                     <div className="mb-4">
                       <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
                         <div className="flex items-center justify-between">
                           <span className="text-blue-700 font-medium">Team Consensus</span>
-                          <span className="text-blue-600">
-                            {teamAnswers.length}/{currentTeamMembers.length} answered
-                          </span>
+                          <span className="text-blue-600">{teamAnswers.length}/{currentTeamMembers.length} answered</span>
                         </div>
-                        {teamAnswers.length > 0 && !hasConsensus && (
-                          <p className="text-blue-600 text-sm mt-1">
-                            Team members have different answers. Coordinate to reach consensus!
-                          </p>
-                        )}
+                        {teamAnswers.length > 0 && !hasConsensus && <p className="text-blue-600 text-sm mt-1">Coordinate to reach consensus!</p>}
                         {hasConsensus && (
                           <div className="flex items-center space-x-2 mt-1">
                             <CheckCircle className="w-4 h-4 text-success-600" />
@@ -858,20 +706,15 @@ export default function Team() {
                   )}
 
                   {isUserTurn && !hasAnswered && selectedAnswer !== null && (
-                    <button
-                      onClick={submitAnswer}
-                      className="btn-primary"
-                    >
-                      <Send className="w-4 h-4 mr-2" />
-                      Submit Answer
+                    <button onClick={submitAnswer} className="btn-primary">
+                      <Send className="w-4 h-4 mr-2" /> Submit Answer
                     </button>
                   )}
-
                   {hasAnswered && (
                     <div className="p-3 bg-success-50 border border-success-200 rounded-lg">
                       <div className="flex items-center space-x-2">
                         <UserCheck className="w-5 h-5 text-success-600" />
-                        <span className="text-success-700">Answer submitted! Waiting for team consensus...</span>
+                        <span className="text-success-700">Answer submitted! Waiting for team...</span>
                       </div>
                     </div>
                   )}
@@ -880,15 +723,12 @@ export default function Team() {
                 <div className="text-center py-12">
                   <Trophy className="w-12 h-12 text-gray-400 mx-auto mb-4" />
                   <h3 className="text-lg font-medium text-gray-900 mb-2">No Active Question</h3>
-                  <p className="text-gray-600">Loading next question...</p>
                 </div>
               )}
             </div>
           </div>
 
-          {/* Teams Panel */}
           <div className="space-y-4">
-            {/* Team Scores */}
             <div className="card">
               <h3 className="text-lg font-semibold text-gray-900 mb-4">Team Scores</h3>
               <div className="space-y-3">
@@ -896,67 +736,37 @@ export default function Team() {
                   const teamMembers = participants.filter(p => p.team_number === teamNum)
                   const score = currentRoom.team_scores[teamNum.toString()] || 0
                   const isCurrentTurn = teamNum === currentRoom.current_turn_team_id
-                  
                   return (
-                    <div
-                      key={teamNum}
-                      className={`p-3 rounded-lg border-2 ${
-                        isCurrentTurn 
-                          ? 'border-primary-500 bg-primary-50' 
-                          : 'border-gray-200 bg-gray-50'
-                      }`}
-                    >
+                    <div key={teamNum} className={`p-3 rounded-lg border-2 ${isCurrentTurn ? 'border-primary-500 bg-primary-50' : 'border-gray-200 bg-gray-50'}`}>
                       <div className="flex items-center justify-between mb-2">
                         <div className="flex items-center space-x-2">
                           {isCurrentTurn && <Play className="w-4 h-4 text-primary-600" />}
                           <span className="font-medium text-gray-900">Team {teamNum}</span>
                         </div>
-                        <div className="text-lg font-bold text-primary-600">
-                          {score}/{currentRoom.questions_per_team}
-                        </div>
+                        <div className="text-lg font-bold text-primary-600">{score}/{currentRoom.questions_per_team}</div>
                       </div>
-                      <div className="text-xs text-gray-600">
-                        {teamMembers.length} members
-                      </div>
+                      <div className="text-xs text-gray-600">{teamMembers.length} members</div>
                     </div>
                   )
                 })}
               </div>
             </div>
-
-            {/* Participants */}
             <div className="card">
-              <h3 className="text-lg font-semibold text-gray-900 mb-4">
-                All Participants ({participants.length})
-              </h3>
-              
+              <h3 className="text-lg font-semibold text-gray-900 mb-4">All Participants ({participants.length})</h3>
               <div className="space-y-2">
                 {participants.map((participant) => {
                   const isCreator = participant.user_id === currentRoom.created_by
                   const hasAnsweredCurrent = currentAnswers[participant.user_id]
-                  
                   return (
-                    <div
-                      key={participant.id}
-                      className="flex items-center justify-between p-2 bg-gray-50 rounded-lg"
-                    >
+                    <div key={participant.id} className="flex items-center justify-between p-2 bg-gray-50 rounded-lg">
                       <div className="flex items-center space-x-2">
                         {isCreator && <Crown className="w-4 h-4 text-yellow-500" />}
-                        <span className="text-sm font-medium text-gray-900">
-                          {participant.user_email}
-                        </span>
-                        <span className="text-xs bg-primary-100 text-primary-700 px-2 py-1 rounded">
-                          Team {participant.team_number}
-                        </span>
+                        <span className="text-sm font-medium text-gray-900">{participant.user_email}</span>
+                        <span className="text-xs bg-primary-100 text-primary-700 px-2 py-1 rounded">Team {participant.team_number}</span>
                       </div>
-                      
                       {currentQuestion && participant.team_number === currentRoom.current_turn_team_id && (
                         <div className="flex items-center space-x-2">
-                          {hasAnsweredCurrent ? (
-                            <UserCheck className="w-4 h-4 text-success-600" />
-                          ) : (
-                            <div className="w-2 h-2 bg-gray-400 rounded-full" />
-                          )}
+                          {hasAnsweredCurrent ? <UserCheck className="w-4 h-4 text-success-600" /> : <div className="w-2 h-2 bg-gray-400 rounded-full" />}
                         </div>
                       )}
                     </div>
@@ -970,7 +780,7 @@ export default function Team() {
     )
   }
 
-  // Room lobby
+  // Lobby UI (unchanged logic, condensed for brevity)
   if (currentRoom && currentRoom.room_status === 'lobby') {
     return (
       <div className="max-w-4xl mx-auto space-y-6 px-4">
@@ -980,92 +790,45 @@ export default function Team() {
             <p className="text-gray-600">Room Code: <span className="font-mono font-bold">{currentRoom.code}</span></p>
           </div>
           <div className="flex space-x-2">
-            <button onClick={leaveRoom} className="btn-secondary">
-              Leave Room
-            </button>
-            {isRoomCreator && (
-              <button 
-                onClick={() => deleteRoom(currentRoom.id)} 
-                className="btn-secondary text-red-600 border-red-200 hover:bg-red-50"
-              >
-                <Trash2 className="w-4 h-4 mr-2" />
-                Delete Room
-              </button>
-            )}
+            <button onClick={leaveRoom} className="btn-secondary">Leave Room</button>
+            {isRoomCreator && <button onClick={() => deleteRoom(currentRoom.id)} className="btn-secondary text-red-600 border-red-200"><Trash2 className="w-4 h-4 mr-2" /> Delete Room</button>}
           </div>
         </div>
-
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Game Settings */}
           <div className="card">
             <h2 className="text-lg font-semibold text-gray-900 mb-4">Game Settings</h2>
             <div className="space-y-3 text-sm">
-              <div className="flex justify-between">
-                <span className="text-gray-600">Number of Teams:</span>
-                <span className="font-medium">{currentRoom.num_teams}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-600">Questions per Team:</span>
-                <span className="font-medium">{currentRoom.questions_per_team}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-600">Time per Question:</span>
-                <span className="font-medium">{currentRoom.time_per_question}s</span>
-              </div>
+              <div className="flex justify-between"><span className="text-gray-600">Number of Teams:</span><span className="font-medium">{currentRoom.num_teams}</span></div>
+              <div className="flex justify-between"><span className="text-gray-600">Questions per Team:</span><span className="font-medium">{currentRoom.questions_per_team}</span></div>
+              <div className="flex justify-between"><span className="text-gray-600">Time per Question:</span><span className="font-medium">{currentRoom.time_per_question}s</span></div>
             </div>
-
             {isRoomCreator && (
               <div className="mt-6">
-                <button
-                  onClick={startGame}
-                  disabled={loading || participants.length < 2}
-                  className="btn-primary w-full"
-                >
-                  {loading ? (
-                    <Loader className="w-4 h-4 mr-2 animate-spin" />
-                  ) : (
-                    <Play className="w-4 h-4 mr-2" />
-                  )}
-                  Start Game
+                <button onClick={startGame} disabled={loading || participants.length < 2} className="btn-primary w-full">
+                  {loading ? <Loader className="w-4 h-4 mr-2 animate-spin" /> : <Play className="w-4 h-4 mr-2" />} Start Game
                 </button>
-                {participants.length < 2 && (
-                  <p className="text-sm text-gray-500 mt-2 text-center">
-                    Need at least 2 participants to start
-                  </p>
-                )}
+                {participants.length < 2 && <p className="text-sm text-gray-500 mt-2 text-center">Need at least 2 participants to start</p>}
               </div>
             )}
           </div>
-
-          {/* Teams */}
           <div className="card">
             <h2 className="text-lg font-semibold text-gray-900 mb-4">Teams</h2>
-            
             <div className="space-y-4">
               {Array.from({ length: currentRoom.num_teams }, (_, i) => i + 1).map(teamNum => {
                 const teamMembers = participants.filter(p => p.team_number === teamNum)
-                
                 return (
                   <div key={teamNum} className="border border-gray-200 rounded-lg p-3">
                     <div className="flex items-center justify-between mb-2">
                       <h3 className="font-medium text-gray-900">Team {teamNum}</h3>
-                      <span className="text-sm text-gray-500">
-                        {teamMembers.length} members
-                      </span>
+                      <span className="text-sm text-gray-500">{teamMembers.length} members</span>
                     </div>
-                    
                     <div className="space-y-1">
                       {teamMembers.map(member => (
                         <div key={member.id} className="flex items-center space-x-2">
-                          {member.user_id === currentRoom.created_by && (
-                            <Crown className="w-4 h-4 text-yellow-500" />
-                          )}
+                          {member.user_id === currentRoom.created_by && <Crown className="w-4 h-4 text-yellow-500" />}
                           <span className="text-sm text-gray-700">{member.user_email}</span>
                         </div>
                       ))}
-                      {teamMembers.length === 0 && (
-                        <p className="text-sm text-gray-500 italic">No members yet</p>
-                      )}
                     </div>
                   </div>
                 )
@@ -1077,222 +840,93 @@ export default function Team() {
     )
   }
 
-  // Main lobby - room selection
+  // Main Menu (unchanged logic)
   return (
     <div className="max-w-4xl mx-auto space-y-6 px-4">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between space-y-4 sm:space-y-0">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Team Challenge</h1>
-          <p className="text-gray-600">
-            Collaborate with your team to answer Formula Student questions
-          </p>
+          <p className="text-gray-600">Collaborate with your team to answer Formula Student questions</p>
         </div>
       </div>
-
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* Create Room */}
         <div className="card">
           <div className="text-center">
-            <div className="w-12 h-12 bg-primary-100 rounded-lg flex items-center justify-center mx-auto mb-4">
-              <Plus className="w-6 h-6 text-primary-600" />
-            </div>
+            <div className="w-12 h-12 bg-primary-100 rounded-lg flex items-center justify-center mx-auto mb-4"><Plus className="w-6 h-6 text-primary-600" /></div>
             <h2 className="text-lg font-semibold text-gray-900 mb-2">Create Room</h2>
-            <p className="text-gray-600 mb-4">
-              Start a new team challenge session
-            </p>
-            
+            <p className="text-gray-600 mb-4">Start a new team challenge session</p>
             {showCreateRoom ? (
               <div className="space-y-4">
-                <input
-                  type="text"
-                  value={roomName}
-                  onChange={(e) => setRoomName(e.target.value)}
-                  placeholder="Enter room name"
-                  className="input-field"
-                />
-                
+                <input type="text" value={roomName} onChange={(e) => setRoomName(e.target.value)} placeholder="Enter room name" className="input-field" />
                 <div className="grid grid-cols-3 gap-2">
                   <div>
                     <label className="block text-xs text-gray-600 mb-1">Teams</label>
-                    <select
-                      value={roomSettings.numTeams}
-                      onChange={(e) => setRoomSettings(prev => ({ ...prev, numTeams: parseInt(e.target.value) }))}
-                      className="input-field text-sm"
-                    >
-                      {[2, 3, 4, 5, 6, 7, 8].map(num => (
-                        <option key={num} value={num}>{num}</option>
-                      ))}
+                    <select value={roomSettings.numTeams} onChange={(e) => setRoomSettings(prev => ({ ...prev, numTeams: parseInt(e.target.value) }))} className="input-field text-sm">
+                      {[2, 3, 4, 5, 6, 7, 8].map(num => <option key={num} value={num}>{num}</option>)}
                     </select>
                   </div>
-                  
                   <div>
                     <label className="block text-xs text-gray-600 mb-1">Questions</label>
-                    <select
-                      value={roomSettings.questionsPerTeam}
-                      onChange={(e) => setRoomSettings(prev => ({ ...prev, questionsPerTeam: parseInt(e.target.value) }))}
-                      className="input-field text-sm"
-                    >
-                      {[5, 10, 15, 20].map(num => (
-                        <option key={num} value={num}>{num}</option>
-                      ))}
+                    <select value={roomSettings.questionsPerTeam} onChange={(e) => setRoomSettings(prev => ({ ...prev, questionsPerTeam: parseInt(e.target.value) }))} className="input-field text-sm">
+                      {[5, 10, 15, 20].map(num => <option key={num} value={num}>{num}</option>)}
                     </select>
                   </div>
-                  
                   <div>
                     <label className="block text-xs text-gray-600 mb-1">Time (s)</label>
-                    <select
-                      value={roomSettings.timePerQuestion}
-                      onChange={(e) => setRoomSettings(prev => ({ ...prev, timePerQuestion: parseInt(e.target.value) }))}
-                      className="input-field text-sm"
-                    >
-                      {[30, 60, 90, 120].map(num => (
-                        <option key={num} value={num}>{num}</option>
-                      ))}
+                    <select value={roomSettings.timePerQuestion} onChange={(e) => setRoomSettings(prev => ({ ...prev, timePerQuestion: parseInt(e.target.value) }))} className="input-field text-sm">
+                      {[30, 60, 90, 120].map(num => <option key={num} value={num}>{num}</option>)}
                     </select>
                   </div>
                 </div>
-                
                 <div className="flex space-x-2">
-                  <button
-                    onClick={createRoom}
-                    disabled={loading || !roomName.trim()}
-                    className="btn-primary flex-1"
-                  >
-                    {loading? <Loader className="w-4 h-4 animate-spin" /> : 'Create'}
-                  </button>
-                  <button
-                    onClick={() => setShowCreateRoom(false)}
-                    className="btn-secondary"
-                  >
-                    Cancel
-                  </button>
+                  <button onClick={createRoom} disabled={loading || !roomName.trim()} className="btn-primary flex-1">{loading ? <Loader className="w-4 h-4 animate-spin" /> : 'Create'}</button>
+                  <button onClick={() => setShowCreateRoom(false)} className="btn-secondary">Cancel</button>
                 </div>
               </div>
-            ) : (
-              <button
-                onClick={() => setShowCreateRoom(true)}
-                className="btn-primary"
-              >
-                Create Room
-              </button>
-            )}
+            ) : <button onClick={() => setShowCreateRoom(true)} className="btn-primary">Create Room</button>}
           </div>
         </div>
-
-        {/* Join Room */}
         <div className="card">
           <div className="text-center">
-            <div className="w-12 h-12 bg-success-100 rounded-lg flex items-center justify-center mx-auto mb-4">
-              <LogIn className="w-6 h-6 text-success-600" />
-            </div>
+            <div className="w-12 h-12 bg-success-100 rounded-lg flex items-center justify-center mx-auto mb-4"><LogIn className="w-6 h-6 text-success-600" /></div>
             <h2 className="text-lg font-semibold text-gray-900 mb-2">Join Room</h2>
-            <p className="text-gray-600 mb-4">
-              Enter a room code to join an existing session
-            </p>
-            
+            <p className="text-gray-600 mb-4">Enter a room code to join an existing session</p>
             {showJoinRoom ? (
               <div className="space-y-4">
-                <input
-                  type="text"
-                  value={roomCode}
-                  onChange={(e) => setRoomCode(e.target.value.toUpperCase())}
-                  placeholder="Enter room code"
-                  className="input-field font-mono text-center"
-                  maxLength={6}
-                />
-                
+                <input type="text" value={roomCode} onChange={(e) => setRoomCode(e.target.value.toUpperCase())} placeholder="Enter room code" className="input-field font-mono text-center" maxLength={6} />
                 <div>
                   <label className="block text-sm text-gray-600 mb-2">Select Team</label>
                   <div className="flex space-x-2">
                     {[1, 2, 3, 4].map(teamNum => (
-                      <button
-                        key={teamNum}
-                        onClick={() => setSelectedTeam(teamNum)}
-                        className={`flex-1 py-2 px-3 rounded-lg border-2 transition-colors ${
-                          selectedTeam === teamNum
-                            ? 'border-primary-500 bg-primary-50 text-primary-700'
-                            : 'border-gray-200 hover:border-gray-300'
-                        }`}
-                      >
-                        Team {teamNum}
-                      </button>
+                      <button key={teamNum} onClick={() => setSelectedTeam(teamNum)} className={`flex-1 py-2 px-3 rounded-lg border-2 transition-colors ${selectedTeam === teamNum ? 'border-primary-500 bg-primary-50 text-primary-700' : 'border-gray-200 hover:border-gray-300'}`}>Team {teamNum}</button>
                     ))}
                   </div>
                 </div>
-                
                 <div className="flex space-x-2">
-                  <button
-                    onClick={joinRoom}
-                    disabled={loading || !roomCode.trim()}
-                    className="btn-primary flex-1"
-                  >
-                    {loading ? <Loader className="w-4 h-4 animate-spin" /> : 'Join'}
-                  </button>
-                  <button
-                    onClick={() => setShowJoinRoom(false)}
-                    className="btn-secondary"
-                  >
-                    Cancel
-                  </button>
+                  <button onClick={joinRoom} disabled={loading || !roomCode.trim()} className="btn-primary flex-1">{loading ? <Loader className="w-4 h-4 animate-spin" /> : 'Join'}</button>
+                  <button onClick={() => setShowJoinRoom(false)} className="btn-secondary">Cancel</button>
                 </div>
               </div>
-            ) : (
-              <button
-                onClick={() => setShowJoinRoom(true)}
-                className="btn-primary"
-              >
-                Join Room
-              </button>
-            )}
+            ) : <button onClick={() => setShowJoinRoom(true)} className="btn-primary">Join Room</button>}
           </div>
         </div>
       </div>
-
-      {/* Active Rooms */}
       {rooms.length > 0 && (
         <div className="card">
           <h2 className="text-lg font-semibold text-gray-900 mb-4">Active Rooms</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {rooms.map((room) => (
               <div key={room.id} className="p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors relative group">
-                {/* Delete button only for creator */}
                 {user?.id === room.created_by && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      deleteRoom(room.id);
-                    }}
-                    className="absolute top-3 right-3 p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-all"
-                    title="Delete Room"
-                  >
+                  <button onClick={(e) => { e.stopPropagation(); deleteRoom(room.id); }} className="absolute top-3 right-3 p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-all" title="Delete Room">
                     <Trash2 className="w-4 h-4" />
                   </button>
                 )}
-                
-                <div className="flex items-center justify-between mb-2 pr-8">
-                  <h3 className="font-medium text-gray-900 truncate">{room.name}</h3>
-                </div>
-                
-                <div className="flex items-center space-x-1 mb-2">
-                    <Users className="w-4 h-4 text-gray-400" />
-                    <span className="text-sm text-gray-500">{room.num_teams} teams</span>
-                </div>
-
-                <p className="text-sm text-gray-600 mb-2">
-                  Code: <span className="font-mono font-bold">{room.code}</span>
-                </p>
-                <p className="text-xs text-gray-500 mb-3">
-                  {room.questions_per_team} questions • {room.time_per_question}s per question
-                </p>
-                <button
-                  onClick={() => {
-                    setRoomCode(room.code)
-                    setShowJoinRoom(true)
-                  }}
-                  className="btn-secondary w-full text-sm"
-                >
-                  Join Room
-                </button>
+                <div className="flex items-center justify-between mb-2 pr-8"><h3 className="font-medium text-gray-900 truncate">{room.name}</h3></div>
+                <div className="flex items-center space-x-1 mb-2"><Users className="w-4 h-4 text-gray-400" /><span className="text-sm text-gray-500">{room.num_teams} teams</span></div>
+                <p className="text-sm text-gray-600 mb-2">Code: <span className="font-mono font-bold">{room.code}</span></p>
+                <p className="text-xs text-gray-500 mb-3">{room.questions_per_team} questions • {room.time_per_question}s per question</p>
+                <button onClick={() => { setRoomCode(room.code); setShowJoinRoom(true); }} className="btn-secondary w-full text-sm">Join Room</button>
               </div>
             ))}
           </div>
