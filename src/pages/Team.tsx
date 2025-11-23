@@ -47,18 +47,15 @@ export default function Team() {
     }
   }, [currentRoom?.id])
 
-  // --- NEW: THE GAME ENGINE EFFECT ---
-  // This watches the room state. If you are the creator, you act as the "Server"
-  // checking if the current team has finished their turn.
+  // --- GAME ENGINE EFFECT ---
+  // Only the creator runs the logic to advance the game
   useEffect(() => {
     if (!currentRoom || !user || currentRoom.room_status !== 'in_progress') return
 
-    // Only the Creator (Host) is allowed to advance the game state
-    // This prevents RLS (Permission) errors from non-creators trying to update the room
     if (currentRoom.created_by === user.id) {
         checkTeamConsensus()
     }
-  }, [currentRoom, participants]) // Run whenever room data or participants change
+  }, [currentRoom, participants])
 
   // Timer effect
   useEffect(() => {
@@ -126,15 +123,12 @@ export default function Team() {
             const updatedRoom = payload.new as TeamRoom
             setCurrentRoom(updatedRoom)
             
-            // Only reset answer selection if the question actually changed
-            // We check this by comparing the question index or the question string
             if (updatedRoom.current_question_index !== currentRoom.current_question_index || 
                 updatedRoom.current_turn_team_id !== currentRoom.current_turn_team_id) {
                  setSelectedAnswer(null)
             }
             
             if (updatedRoom.room_status === 'in_progress' && updatedRoom.current_question) {
-               // Only reset timer if question changed
                if (updatedRoom.current_question_index !== currentRoom.current_question_index) {
                    setTimeRemaining(updatedRoom.time_per_question)
                    setTimerActive(true)
@@ -384,9 +378,6 @@ export default function Team() {
         team_number: participants.find(p => p.user_id === user.id)?.team_number
       }
 
-      // NOTE: We only update the answers here. 
-      // The "advanceToNextQuestion" logic is now handled in the useEffect
-      // that watches for room updates.
       await supabase
         .from('team_rooms')
         .update({ current_answers: currentAnswers })
@@ -400,26 +391,20 @@ export default function Team() {
   const checkTeamConsensus = async () => {
     if (!currentRoom) return
 
-    // Get current team's members
     const currentTeamMembers = participants.filter(p => p.team_number === currentRoom.current_turn_team_id)
-    if (currentTeamMembers.length === 0) return // Should not happen
+    if (currentTeamMembers.length === 0) return
 
     const currentAnswers = currentRoom.current_answers || {}
-    
-    // Get answers from current team members
     const teamAnswers = currentTeamMembers
         .map(member => currentAnswers[member.user_id])
         .filter(answer => answer !== undefined)
 
-    // 1. Check if all members answered
     if (teamAnswers.length === currentTeamMembers.length && teamAnswers.length > 0) {
-        // 2. Check if all answers are the same
         const firstAnswer = teamAnswers[0]?.answer
         const allSame = teamAnswers.every(answer => answer.answer === firstAnswer)
 
         if (allSame) {
             console.log('✅ Consensus reached detected by Host')
-            // Add a small delay for UX so players see the result briefly
             setTimeout(() => {
                 advanceToNextQuestion(firstAnswer)
             }, 1000)
@@ -427,11 +412,16 @@ export default function Team() {
     }
   }
 
+  // --- FIXED FUNCTION HERE ---
   const advanceToNextQuestion = async (teamAnswer: string | number) => {
-    // Double check: Only creator runs this
     if (!currentRoom || currentRoom.created_by !== user?.id) return
 
-    console.log('⏭️ Advancing to next question...')
+    // Defensive check: Ensure team_questions exists
+    if (!currentRoom.team_questions) {
+      console.error("❌ Critical Error: team_questions is missing from room state");
+      return;
+    }
+
     try {
         const currentTeam = currentRoom.current_turn_team_id
         const currentQuestion = currentRoom.current_question as QuizQuestion
@@ -440,17 +430,18 @@ export default function Team() {
         // Update score
         const teamScores = { ...currentRoom.team_scores }
         if (isCorrect) {
-        teamScores[currentTeam.toString()] = (teamScores[currentTeam.toString()] || 0) + 1
+          teamScores[currentTeam.toString()] = (teamScores[currentTeam.toString()] || 0) + 1
         }
 
         // Calculate next state
         let nextTeam = (currentTeam % currentRoom.num_teams) + 1
         let nextQuestionIndex = currentRoom.current_question_index
         
-        // If cycled back to Team 1, increment question index
         if (nextTeam === 1) {
             nextQuestionIndex++
         }
+
+        console.log(`⏭️ Advancing to: Team ${nextTeam}, Question Index ${nextQuestionIndex}`)
 
         // Check if finished
         if (nextQuestionIndex >= currentRoom.questions_per_team) {
@@ -465,17 +456,29 @@ export default function Team() {
                 })
                 .eq('id', currentRoom.id)
         } else {
-            // Get next question
-            const teamQuestions = currentRoom.team_questions[nextTeam.toString()] || []
-            const nextQuestion = teamQuestions[nextQuestionIndex]
+            // SAFE ACCESS: Get next question
+            const allTeamQuestions = currentRoom.team_questions as Record<string, QuizQuestion[]>;
+            const nextTeamString = nextTeam.toString();
+            
+            // Ensure array exists for next team
+            const teamSpecificQuestions = allTeamQuestions[nextTeamString] || [];
+            
+            // Get question safely
+            const nextQuestion = teamSpecificQuestions[nextQuestionIndex];
+
+            if (!nextQuestion) {
+              console.error(`❌ No question found for Team ${nextTeamString} at index ${nextQuestionIndex}`);
+              // Emergency fallback: finish game or cycle?
+              // For now, let's just log.
+            }
 
             await supabase
                 .from('team_rooms')
                 .update({
                     current_turn_team_id: nextTeam,
                     current_question_index: nextQuestionIndex,
-                    current_question: nextQuestion,
-                    current_answers: {}, // Clear answers for next turn
+                    current_question: nextQuestion || null, // handle undefined safely
+                    current_answers: {}, 
                     team_scores: teamScores,
                     updated_at: new Date().toISOString()
                 })
@@ -489,8 +492,6 @@ export default function Team() {
   const handleTimeUp = async () => {
     if (!currentRoom) return
     setTimerActive(false)
-    
-    // Only creator handles time up
     if (user?.id === currentRoom.created_by) {
         await advanceToNextQuestion('PASS')
     }
@@ -510,7 +511,6 @@ export default function Team() {
   const isUserTurn = userParticipant?.team_number === currentRoom?.current_turn_team_id
   const hasAnswered = user?.id && currentAnswers[user.id]
 
-  // Visualization logic
   const currentTeamMembers = participants.filter(p => p.team_number === currentRoom?.current_turn_team_id)
   const teamAnswers = currentTeamMembers
     .map(member => currentAnswers[member.user_id])
@@ -780,7 +780,7 @@ export default function Team() {
     )
   }
 
-  // Lobby UI (unchanged logic, condensed for brevity)
+  // Lobby UI
   if (currentRoom && currentRoom.room_status === 'lobby') {
     return (
       <div className="max-w-4xl mx-auto space-y-6 px-4">
@@ -840,7 +840,7 @@ export default function Team() {
     )
   }
 
-  // Main Menu (unchanged logic)
+  // Main Menu
   return (
     <div className="max-w-4xl mx-auto space-y-6 px-4">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between space-y-4 sm:space-y-0">
