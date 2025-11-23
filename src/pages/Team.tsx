@@ -756,16 +756,20 @@ export default function Team() {
                     <div className="space-y-4">
                         <input type="text" value={roomName} onChange={e => setRoomName(e.target.value)} placeholder="Room Name" className="input-field" />
                         <div className="grid grid-cols-2 gap-2">
-                             <div><label className="text-xs text-gray-600">Questions</label><input
-      type="number"
-      min={1}
-      max={99}
-      value={roomSettings.questionsPerTeam}
-      onChange={e =>
-        setRoomSettings(p => ({ ...p, questionsPerTeam: v === "" ? "" : parseInt(v) }));
-      }
-      className="input-field text-sm"
-    />
+                             <div><label className="text-xs text-gray-600">Questions</label><<input
+  type="number"
+  value={roomSettings.questionsPerTeam}
+  onChange={e => {
+    const v = e.target.value;
+
+    // allow empty string while typing
+    setRoomSettings(p => ({
+      ...p,
+      questionsPerTeam: v === "" ? "" : parseInt(v)
+    }));
+  }}
+  className="input-field text-sm"
+/>
   </div>
                              <div><label className="text-xs text-gray-600">Time (s)</label><select value={roomSettings.timePerQuestion} onChange={e => setRoomSettings(p => ({...p, timePerQuestion: parseInt(e.target.value)}))} className="input-field text-sm">{[30,60,90,120].map(n=><option key={n} value={n}>{n}</option>)}</select></div>
                         </div>
