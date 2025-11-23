@@ -48,12 +48,14 @@ export default function Team() {
   }, [currentRoom?.id])
 
   // --- GAME ENGINE EFFECT ---
-  // Only the creator runs the logic to advance the game
   useEffect(() => {
     if (!currentRoom || !user || currentRoom.room_status !== 'in_progress') return
 
     if (currentRoom.created_by === user.id) {
-        checkTeamConsensus()
+        // Double check data integrity before running consensus
+        if (currentRoom.team_questions && Object.keys(currentRoom.team_questions).length > 0) {
+            checkTeamConsensus()
+        }
     }
   }, [currentRoom, participants])
 
@@ -105,6 +107,7 @@ export default function Team() {
     }
   }
 
+  // --- FIXED SUBSCRIPTION LOGIC ---
   const subscribeToRoomUpdates = () => {
     if (!currentRoom) return
   
@@ -121,21 +124,38 @@ export default function Team() {
         (payload) => {
           if (payload.new) {
             const updatedRoom = payload.new as TeamRoom
-            setCurrentRoom(updatedRoom)
             
-            if (updatedRoom.current_question_index !== currentRoom.current_question_index || 
-                updatedRoom.current_turn_team_id !== currentRoom.current_turn_team_id) {
-                 setSelectedAnswer(null)
-            }
-            
-            if (updatedRoom.room_status === 'in_progress' && updatedRoom.current_question) {
-               if (updatedRoom.current_question_index !== currentRoom.current_question_index) {
-                   setTimeRemaining(updatedRoom.time_per_question)
-                   setTimerActive(true)
-               }
-            } else {
-              setTimerActive(false)
-            }
+            // CRITICAL FIX: Use functional state update to merge and preserve team_questions
+            setCurrentRoom(prevRoom => {
+                if (!prevRoom) return updatedRoom;
+                
+                // If the new payload has empty/null questions but we have them in memory, keep memory version
+                const preservedQuestions = (updatedRoom.team_questions && Object.keys(updatedRoom.team_questions).length > 0)
+                    ? updatedRoom.team_questions
+                    : prevRoom.team_questions;
+
+                const mergedRoom = {
+                    ...updatedRoom,
+                    team_questions: preservedQuestions
+                };
+
+                // Handle side effects of state change
+                if (mergedRoom.current_question_index !== prevRoom.current_question_index || 
+                    mergedRoom.current_turn_team_id !== prevRoom.current_turn_team_id) {
+                     setSelectedAnswer(null)
+                }
+                
+                if (mergedRoom.room_status === 'in_progress' && mergedRoom.current_question) {
+                   if (mergedRoom.current_question_index !== prevRoom.current_question_index) {
+                       setTimeRemaining(mergedRoom.time_per_question)
+                       setTimerActive(true)
+                   }
+                } else {
+                  setTimerActive(false)
+                }
+
+                return mergedRoom;
+            })
           }
         }
       )
@@ -356,6 +376,18 @@ export default function Team() {
 
       if (updateError) throw updateError
 
+      // Manually set state immediately to ensure creator has the data
+      setCurrentRoom(prev => prev ? {
+          ...prev,
+          room_status: 'in_progress',
+          team_questions: teamQuestions,
+          team_scores: teamScores,
+          current_turn_team_id: 1,
+          current_question_index: 0,
+          current_question: firstQuestion,
+          current_answers: {}
+      } : null)
+
       setSelectedAnswer(null)
       setTimeRemaining(currentRoom.time_per_question)
       setTimerActive(true)
@@ -412,13 +444,15 @@ export default function Team() {
     }
   }
 
-  // --- FIXED FUNCTION HERE ---
   const advanceToNextQuestion = async (teamAnswer: string | number) => {
     if (!currentRoom || currentRoom.created_by !== user?.id) return
 
-    // Defensive check: Ensure team_questions exists
-    if (!currentRoom.team_questions) {
-      console.error("❌ Critical Error: team_questions is missing from room state");
+    // Re-check safety inside the function
+    if (!currentRoom.team_questions || Object.keys(currentRoom.team_questions).length === 0) {
+      console.error("❌ Aborting advance: team_questions is empty or missing.");
+      // Force refresh the room data if we are missing state
+      const { data } = await supabase.from('team_rooms').select('*').eq('id', currentRoom.id).single();
+      if (data) setCurrentRoom(data as TeamRoom);
       return;
     }
 
@@ -456,20 +490,14 @@ export default function Team() {
                 })
                 .eq('id', currentRoom.id)
         } else {
-            // SAFE ACCESS: Get next question
+            // SAFE ACCESS
             const allTeamQuestions = currentRoom.team_questions as Record<string, QuizQuestion[]>;
             const nextTeamString = nextTeam.toString();
-            
-            // Ensure array exists for next team
             const teamSpecificQuestions = allTeamQuestions[nextTeamString] || [];
-            
-            // Get question safely
             const nextQuestion = teamSpecificQuestions[nextQuestionIndex];
 
             if (!nextQuestion) {
               console.error(`❌ No question found for Team ${nextTeamString} at index ${nextQuestionIndex}`);
-              // Emergency fallback: finish game or cycle?
-              // For now, let's just log.
             }
 
             await supabase
@@ -477,7 +505,7 @@ export default function Team() {
                 .update({
                     current_turn_team_id: nextTeam,
                     current_question_index: nextQuestionIndex,
-                    current_question: nextQuestion || null, // handle undefined safely
+                    current_question: nextQuestion || null, 
                     current_answers: {}, 
                     team_scores: teamScores,
                     updated_at: new Date().toISOString()
