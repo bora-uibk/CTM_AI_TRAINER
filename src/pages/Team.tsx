@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { supabase, TeamRoom, RoomParticipant, QuizQuestion } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
-import { Users, Plus, LogIn, Crown, UserCheck, Send, RotateCcw, Trophy, Loader, Clock, Play, Settings, CircleCheck as CheckCircle, Circle as XCircle, Timer, Target, Award } from 'lucide-react'
+import { Users, Plus, LogIn, Crown, UserCheck, Send, RotateCcw, Trophy, Loader, Clock, Play, Settings, CircleCheck as CheckCircle, Circle as XCircle, Timer, Target, Award, Trash2 } from 'lucide-react'
 
 export default function Team() {
   const { user } = useAuth()
@@ -36,17 +36,17 @@ export default function Team() {
   }, [])
 
   useEffect(() => {
-  if (currentRoom) {
-    fetchParticipants()
-    const unsubscribe = subscribeToRoomUpdates()
-    
-    return () => {
-      if (unsubscribe) {
-        unsubscribe()
+    if (currentRoom) {
+      fetchParticipants()
+      const unsubscribe = subscribeToRoomUpdates()
+      
+      return () => {
+        if (unsubscribe) {
+          unsubscribe()
+        }
       }
     }
-  }
-}, [currentRoom?.id]) // Only depend on currentRoom.id, not the entire object
+  }, [currentRoom?.id])
 
   // Timer effect
   useEffect(() => {
@@ -97,71 +97,80 @@ export default function Team() {
   }
 
   const subscribeToRoomUpdates = () => {
-  if (!currentRoom) return
-
-  console.log('🔔 Setting up real-time subscriptions for room:', currentRoom.id)
-
-  // Create a single channel for all room updates
-  const channel = supabase
-    .channel(`room-updates-${currentRoom.id}`)
-    .on(
-      'postgres_changes',
-      {
-        event: 'UPDATE',
-        schema: 'public',
-        table: 'team_rooms',
-        filter: `id=eq.${currentRoom.id}`
-      },
-      (payload) => {
-        console.log('🔄 Room update received:', payload)
-        if (payload.new) {
-          const updatedRoom = payload.new as TeamRoom
-          console.log('📝 Updating room state:', {
-            status: updatedRoom.room_status,
-            questionIndex: updatedRoom.current_question_index,
-            currentTeam: updatedRoom.current_turn_team_id,
-            hasQuestion: !!updatedRoom.current_question
-          })
-          
-          // Update the current room state
-          setCurrentRoom(updatedRoom)
-          
-          // Reset answer state when question changes
-          setSelectedAnswer(null)
-          
-          // Update timer when question changes
-          if (updatedRoom.room_status === 'in_progress' && updatedRoom.current_question) {
-            setTimeRemaining(updatedRoom.time_per_question)
-            setTimerActive(true)
-          } else {
-            setTimerActive(false)
+    if (!currentRoom) return
+  
+    console.log('🔔 Setting up real-time subscriptions for room:', currentRoom.id)
+  
+    // Create a single channel for all room updates
+    const channel = supabase
+      .channel(`room-updates-${currentRoom.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'team_rooms',
+          filter: `id=eq.${currentRoom.id}`
+        },
+        (payload) => {
+          console.log('🔄 Room update received:', payload)
+          if (payload.new) {
+            const updatedRoom = payload.new as TeamRoom
+            setCurrentRoom(updatedRoom)
+            
+            // Reset answer state when question changes
+            setSelectedAnswer(null)
+            
+            // Update timer when question changes
+            if (updatedRoom.room_status === 'in_progress' && updatedRoom.current_question) {
+              setTimeRemaining(updatedRoom.time_per_question)
+              setTimerActive(true)
+            } else {
+              setTimerActive(false)
+            }
           }
         }
-      }
-    )
-    .on(
-      'postgres_changes',
-      {
-        event: '*',
-        schema: 'public',
-        table: 'room_participants',
-        filter: `room_id=eq.${currentRoom.id}`
-      },
-      (payload) => {
-        console.log('👥 Participants changed:', payload.eventType)
-        fetchParticipants()
-      }
-    )
-    .subscribe((status) => {
-      console.log('📡 Subscription status:', status)
-    })
-
-  // Return cleanup function
-  return () => {
-    console.log('🧹 Cleaning up subscription')
-    channel.unsubscribe()
+      )
+      // NEW: Listen for DELETE events (Room deleted by host)
+      .on(
+        'postgres_changes',
+        {
+          event: 'DELETE',
+          schema: 'public',
+          table: 'team_rooms',
+          filter: `id=eq.${currentRoom.id}`
+        },
+        () => {
+           console.log('❌ Room was deleted')
+           alert('The room has been closed by the host.')
+           setCurrentRoom(null)
+           setParticipants([])
+           fetchRooms()
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'room_participants',
+          filter: `room_id=eq.${currentRoom.id}`
+        },
+        (payload) => {
+          console.log('👥 Participants changed:', payload.eventType)
+          fetchParticipants()
+        }
+      )
+      .subscribe((status) => {
+        console.log('📡 Subscription status:', status)
+      })
+  
+    // Return cleanup function
+    return () => {
+      console.log('🧹 Cleaning up subscription')
+      channel.unsubscribe()
+    }
   }
-}
 
   const createRoom = async () => {
     if (!roomName.trim() || !user) return
@@ -209,6 +218,44 @@ export default function Team() {
       fetchRooms()
     } catch (error) {
       console.error('Error creating room:', error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // --- NEW DELETE ROOM FUNCTION ---
+  const deleteRoom = async (roomId: string) => {
+    if (!user) return
+    
+    // Confirm deletion
+    if (!window.confirm("Are you sure you want to delete this room? This cannot be undone.")) {
+      return
+    }
+
+    setLoading(true)
+    try {
+      // Supabase cascade delete should handle participants if configured, 
+      // otherwise explicit deletion might be needed. 
+      // Assuming 'team_rooms' deletion is sufficient here.
+      const { error } = await supabase
+        .from('team_rooms')
+        .delete()
+        .eq('id', roomId)
+        .eq('created_by', user.id) // Security check
+
+      if (error) throw error
+
+      // Update local state
+      setRooms(prevRooms => prevRooms.filter(room => room.id !== roomId))
+      
+      // If we were inside the room, leave it
+      if (currentRoom?.id === roomId) {
+        setCurrentRoom(null)
+        setParticipants([])
+      }
+    } catch (error) {
+      console.error('Error deleting room:', error)
+      alert('Failed to delete room.')
     } finally {
       setLoading(false)
     }
@@ -612,10 +659,16 @@ export default function Team() {
             })}
           </div>
 
-          <div className="mt-8 text-center">
+          <div className="mt-8 text-center flex justify-center space-x-4">
             <button onClick={leaveRoom} className="btn-primary">
               Leave Room
             </button>
+            {isRoomCreator && (
+              <button onClick={() => deleteRoom(currentRoom.id)} className="btn-secondary text-red-600 border-red-200 hover:bg-red-50">
+                <Trash2 className="w-4 h-4 mr-2" />
+                Delete Room
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -631,30 +684,41 @@ export default function Team() {
             <h1 className="text-2xl font-bold text-gray-900">{currentRoom.name}</h1>
             <p className="text-gray-600">Room Code: <span className="font-mono font-bold">{currentRoom.code}</span></p>
           </div>
-          <button onClick={leaveRoom} className="btn-secondary">
-            Leave Room
-          </button>
-          <button
-  onClick={() => {
-    console.log('🔄 Manual refresh triggered')
-    if (currentRoom) {
-      supabase
-        .from('team_rooms')
-        .select('*')
-        .eq('id', currentRoom.id)
-        .single()
-        .then(({ data, error }) => {
-          if (!error && data) {
-            console.log('✅ Manually refreshed room data')
-            setCurrentRoom(data as TeamRoom)
-          }
-        })
-    }
-  }}
-  className="btn-secondary"
->
-  <RotateCcw className="w-4 h-4" />
-</button>
+          <div className="flex space-x-2">
+            <button onClick={leaveRoom} className="btn-secondary">
+                Leave Room
+            </button>
+            {isRoomCreator && (
+              <button 
+                onClick={() => deleteRoom(currentRoom.id)} 
+                className="p-2 border border-red-200 rounded-lg text-red-600 hover:bg-red-50 transition-colors"
+                title="Delete Room"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            )}
+            <button
+                onClick={() => {
+                    console.log('🔄 Manual refresh triggered')
+                    if (currentRoom) {
+                    supabase
+                        .from('team_rooms')
+                        .select('*')
+                        .eq('id', currentRoom.id)
+                        .single()
+                        .then(({ data, error }) => {
+                        if (!error && data) {
+                            console.log('✅ Manually refreshed room data')
+                            setCurrentRoom(data as TeamRoom)
+                        }
+                        })
+                    }
+                }}
+                className="btn-secondary"
+            >
+                <RotateCcw className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
         {/* Game Status */}
@@ -915,9 +979,20 @@ export default function Team() {
             <h1 className="text-2xl font-bold text-gray-900">{currentRoom.name}</h1>
             <p className="text-gray-600">Room Code: <span className="font-mono font-bold">{currentRoom.code}</span></p>
           </div>
-          <button onClick={leaveRoom} className="btn-secondary">
-            Leave Room
-          </button>
+          <div className="flex space-x-2">
+            <button onClick={leaveRoom} className="btn-secondary">
+              Leave Room
+            </button>
+            {isRoomCreator && (
+              <button 
+                onClick={() => deleteRoom(currentRoom.id)} 
+                className="btn-secondary text-red-600 border-red-200 hover:bg-red-50"
+              >
+                <Trash2 className="w-4 h-4 mr-2" />
+                Delete Room
+              </button>
+            )}
+          </div>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -1179,14 +1254,30 @@ export default function Team() {
           <h2 className="text-lg font-semibold text-gray-900 mb-4">Active Rooms</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {rooms.map((room) => (
-              <div key={room.id} className="p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
-                <div className="flex items-center justify-between mb-2">
-                  <h3 className="font-medium text-gray-900">{room.name}</h3>
-                  <div className="flex items-center space-x-1">
-                    <Users className="w-4 h-4 text-gray-400" />
-                    <span className="text-sm text-gray-500">{room.num_teams}</span>
-                  </div>
+              <div key={room.id} className="p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors relative group">
+                {/* Delete button only for creator */}
+                {user?.id === room.created_by && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      deleteRoom(room.id);
+                    }}
+                    className="absolute top-3 right-3 p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-all"
+                    title="Delete Room"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                )}
+                
+                <div className="flex items-center justify-between mb-2 pr-8">
+                  <h3 className="font-medium text-gray-900 truncate">{room.name}</h3>
                 </div>
+                
+                <div className="flex items-center space-x-1 mb-2">
+                    <Users className="w-4 h-4 text-gray-400" />
+                    <span className="text-sm text-gray-500">{room.num_teams} teams</span>
+                </div>
+
                 <p className="text-sm text-gray-600 mb-2">
                   Code: <span className="font-mono font-bold">{room.code}</span>
                 </p>
