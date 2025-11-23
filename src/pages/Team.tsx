@@ -337,6 +337,7 @@ export default function Team() {
     }
   }
 
+  // --- CORE GAME LOGIC WITH FIX ---
   const advanceToNextQuestion = async (teamAnswer: string | number) => {
     if (!currentRoom || currentRoom.created_by !== user?.id) return
     if (!currentRoom.team_questions || Object.keys(currentRoom.team_questions).length === 0) {
@@ -345,9 +346,15 @@ export default function Team() {
       return;
     }
 
+    // --- GUARD CLAUSE: Check if current question exists before accessing properties ---
+    const currentQ = currentRoom.current_question as GameQuestion | null;
+    if (!currentQ) {
+        console.error("❌ Error: Attempted to check answer, but current_question is null/undefined.");
+        return;
+    }
+
     try {
         const currentTeam = currentRoom.current_turn_team_id
-        const currentQ = currentRoom.current_question as GameQuestion
         const isCorrect = teamAnswer === currentQ.correct_answer
         const originalOwner = currentQ.owner_team_id || currentTeam
         const isStealAttempt = currentTeam !== originalOwner
@@ -668,38 +675,6 @@ export default function Team() {
                   </div>
                 ))}
               </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  if (currentRoom && currentRoom.room_status === 'lobby') {
-    return (
-      <div className="max-w-4xl mx-auto space-y-6 px-4">
-        <div className="flex justify-between items-center">
-            <div><h1 className="text-2xl font-bold text-gray-900">{currentRoom.name}</h1><p className="text-gray-600">Code: <span className="font-mono font-bold">{currentRoom.code}</span></p></div>
-            <div className="flex space-x-2"><button onClick={leaveRoom} className="btn-secondary">Leave</button>{isRoomCreator && <button onClick={() => deleteRoom(currentRoom.id)} className="btn-secondary text-red-600 border-red-200"><Trash2 className="w-4 h-4" /> Delete</button>}</div>
-        </div>
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="card">
-            <h2 className="text-lg font-semibold text-gray-900 mb-4">Settings</h2>
-            <div className="space-y-3 text-sm">
-                <div className="flex justify-between"><span className="text-gray-600">Teams:</span><span className="font-medium">2 (Fixed)</span></div>
-                <div className="flex justify-between"><span className="text-gray-600">Questions/Team:</span><span className="font-medium">{currentRoom.questions_per_team}</span></div>
-            </div>
-            {isRoomCreator && <div className="mt-6"><button onClick={startGame} disabled={loading || participants.length < 2} className="btn-primary w-full">{loading ? <Loader className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4 mr-2" />} Start Game</button></div>}
-          </div>
-          <div className="card">
-            <h2 className="text-lg font-semibold text-gray-900 mb-4">Teams</h2>
-            <div className="space-y-4">
-                {[1, 2].map(teamNum => (
-                    <div key={teamNum} className="border border-gray-200 rounded-lg p-3">
-                        <div className="flex justify-between mb-2"><h3 className="font-medium">Team {teamNum}</h3><span className="text-sm text-gray-500">{participants.filter(p => p.team_number === teamNum).length} members</span></div>
-                        <div className="space-y-1">{participants.filter(p => p.team_number === teamNum).map(m => <div key={m.id} className="text-sm text-gray-700">{m.user_email}</div>)}</div>
-                    </div>
-                ))}
             </div>
           </div>
         </div>
