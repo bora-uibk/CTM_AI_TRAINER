@@ -55,15 +55,20 @@ export default function Team() {
     }
   }, [currentRoom?.id])
 
+  // --- GAME ENGINE (HOST ONLY) ---
   useEffect(() => {
     if (!currentRoom || !user || currentRoom.room_status !== 'in_progress') return
+
+    // Only the Host checks for consensus to advance game
     if (currentRoom.created_by === user.id) {
+        // Safety check to ensure questions are loaded
         if (currentRoom.team_questions && Object.keys(currentRoom.team_questions).length > 0) {
             checkTeamConsensus()
         }
     }
-  }, [currentRoom, participants])
+  }, [currentRoom, participants]) // Run whenever room data or participants change
 
+  // --- TIMER EFFECT ---
   useEffect(() => {
     let interval: NodeJS.Timeout
     if (timerActive && timeRemaining > 0) {
@@ -118,6 +123,8 @@ export default function Team() {
             const updatedRoom = payload.new as ExtendedTeamRoom
             setCurrentRoom(prevRoom => {
                 if (!prevRoom) return updatedRoom;
+                
+                // Preserve complex objects if missing in payload (Supabase Realtime optimization sometimes omits unchanged massive JSON columns)
                 const preservedQuestions = (updatedRoom.team_questions && Object.keys(updatedRoom.team_questions).length > 0)
                     ? updatedRoom.team_questions : prevRoom.team_questions;
                 
@@ -129,14 +136,18 @@ export default function Team() {
                     feedback: preservedFeedback
                 };
 
+                // State change detection for UI
                 const prevQ = prevRoom.current_question as GameQuestion;
                 const nextQ = mergedRoom.current_question as GameQuestion;
                 
+                // If question changed OR ownership changed (steal happened), reset selections
                 if (prevQ?.question !== nextQ?.question || mergedRoom.current_turn_team_id !== prevRoom.current_turn_team_id) {
                      setSelectedAnswer(null)
                 }
                 
+                // Timer Logic
                 if (mergedRoom.room_status === 'in_progress') {
+                   // If turn changed or question changed, reset timer
                    if (mergedRoom.current_turn_team_id !== prevRoom.current_turn_team_id || 
                        mergedRoom.current_question_index !== prevRoom.current_question_index) {
                        setTimeRemaining(mergedRoom.time_per_question)
@@ -170,6 +181,7 @@ export default function Team() {
     setLoading(true)
     try {
       const code = Math.random().toString(36).substring(2, 8).toUpperCase()
+      
       const { data, error } = await supabase
         .from('team_rooms')
         .insert({
@@ -192,7 +204,17 @@ export default function Team() {
         .select().single()
 
       if (error) throw error
-      await supabase.from('room_participants').insert({ room_id: data.id, user_id: user.id, user_email: user.email || '', team_number: 1 })
+
+      // Join the room as creator (Team 1)
+      await supabase
+        .from('room_participants')
+        .insert({
+          room_id: data.id,
+          user_id: user.id,
+          user_email: user.email || '',
+          team_number: 1
+        })
+
       setCurrentRoom(data)
       setShowCreateRoom(false)
       setRoomName('')
@@ -207,44 +229,89 @@ export default function Team() {
   const deleteRoom = async (roomId: string) => {
     if (!user) return
     if (!window.confirm("Are you sure you want to delete this room? This action cannot be undone.")) return
+
     setLoading(true)
     try {
-      await supabase.from('team_rooms').delete().eq('id', roomId).eq('created_by', user.id)
+      const { error } = await supabase
+        .from('team_rooms')
+        .delete()
+        .eq('id', roomId)
+        .eq('created_by', user.id) // Security check
+
+      if (error) throw error
+
       setRooms(prev => prev.filter(r => r.id !== roomId))
+      
+      // If we were inside the room, leave it
       if (currentRoom?.id === roomId) {
         setCurrentRoom(null)
         setParticipants([])
       }
     } catch (error) {
-      console.error('Error deleting:', error)
+      console.error('Error deleting room:', error)
+      alert('Failed to delete room.')
     } finally {
       setLoading(false)
     }
   }
 
+  // --- RESTORED ROBUST JOIN ROOM FUNCTION ---
   const joinRoom = async () => {
     if (!roomCode.trim() || !user) return
+
     setLoading(true)
     try {
+      // 1. Find the room
       const { data: room, error: roomError } = await supabase
         .from('team_rooms')
         .select('*')
         .eq('code', roomCode.trim().toUpperCase())
         .eq('is_active', true)
         .single()
+
       if (roomError) throw new Error('Room not found')
 
-      const { data: existing } = await supabase.from('room_participants').select('*').eq('room_id', room.id).eq('user_id', user.id).maybeSingle()
+      // 2. Check if user is already in the room
+      const { data: existing, error: existingError } = await supabase
+        .from('room_participants')
+        .select('*')
+        .eq('room_id', room.id)
+        .eq('user_id', user.id)
+        .maybeSingle()
 
+      if (existingError) throw existingError
+
+      // 3. If not in room, insert participant
       if (!existing) {
-        if (selectedTeam > 2) { alert("Only 2 teams allowed"); setLoading(false); return; }
-        await supabase.from('room_participants').insert({ room_id: room.id, user_id: user.id, user_email: user.email || '', team_number: selectedTeam })
+        // Constraint check
+        if (selectedTeam > 2) { 
+            alert("Only 2 teams allowed"); 
+            setLoading(false); 
+            return; 
+        }
+        
+        const { error: joinError } = await supabase
+          .from('room_participants')
+          .insert({
+            room_id: room.id,
+            user_id: user.id,
+            user_email: user.email || '',
+            team_number: selectedTeam
+          })
+
+        if (joinError) {
+            console.error("Join Error Details:", joinError);
+            throw new Error('Failed to join room. Please try again.');
+        }
       }
+
+      // 4. Success - Enter Room
       setCurrentRoom(room)
       setShowJoinRoom(false)
       setRoomCode('')
-    } catch (error) {
-      alert('Failed to join room.')
+    } catch (error: any) {
+      console.error('Error joining room:', error)
+      alert(error.message || 'Failed to join room. Please check the room code.')
     } finally {
       setLoading(false)
     }
@@ -253,34 +320,56 @@ export default function Team() {
   const leaveRoom = async () => {
     if (!currentRoom || !user) return
     try {
-      await supabase.from('room_participants').delete().eq('room_id', currentRoom.id).eq('user_id', user.id)
+      await supabase
+        .from('room_participants')
+        .delete()
+        .eq('room_id', currentRoom.id)
+        .eq('user_id', user.id)
+
       setCurrentRoom(null)
       setParticipants([])
       setSelectedAnswer(null)
       setTimerActive(false)
-    } catch (error) { console.error(error) }
+      setTimeRemaining(0)
+    } catch (error) {
+      console.error('Error leaving room:', error)
+    }
   }
 
   const startGame = async () => {
     if (!currentRoom || currentRoom.created_by !== user?.id) return
+
     setLoading(true)
     try {
+      // Generate questions
       const totalQuestions = 2 * currentRoom.questions_per_team
+      
+      console.log('🎯 Generating questions:', { totalQuestions })
+      
       const { data, error } = await supabase.functions.invoke('generate-quiz', {
-        body: { count: totalQuestions, selectedDocuments: Array.from(selectedDocuments) }
+        body: { 
+          count: totalQuestions,
+          selectedDocuments: Array.from(selectedDocuments)
+        }
       })
 
-      if (error || !data?.questions) throw new Error('Quiz gen failed')
+      if (error) throw error
+      if (!data || !data.questions) throw new Error('Invalid quiz generation response')
 
+      // Distribute questions
       const teamQuestions: Record<string, QuizQuestion[]> = {}
       const teamScores: Record<string, number> = { "1": 0, "2": 0 }
       
       teamQuestions["1"] = data.questions.slice(0, currentRoom.questions_per_team)
       teamQuestions["2"] = data.questions.slice(currentRoom.questions_per_team, totalQuestions)
 
+      // Get first question and mark owner
       const firstQ = { ...teamQuestions["1"][0], owner_team_id: 1 }
 
-      await supabase.from('team_rooms').update({
+      // Initialize Game State
+      const { error: updateError } = await supabase
+        .from('team_rooms')
+        .update({
           room_status: 'in_progress',
           team_questions: teamQuestions,
           team_scores: teamScores,
@@ -289,18 +378,29 @@ export default function Team() {
           current_question: firstQ,
           current_answers: {},
           feedback: null
-        }).eq('id', currentRoom.id)
+        })
+        .eq('id', currentRoom.id)
 
+      if (updateError) throw updateError
+
+      // Manually update local state to ensure responsiveness
       setCurrentRoom(prev => prev ? {
-          ...prev, room_status: 'in_progress', team_questions: teamQuestions, team_scores: teamScores,
-          current_turn_team_id: 1, current_question_index: 0, current_question: firstQ, current_answers: {}, feedback: null
+          ...prev, 
+          room_status: 'in_progress', 
+          team_questions: teamQuestions, 
+          team_scores: teamScores,
+          current_turn_team_id: 1, 
+          current_question_index: 0, 
+          current_question: firstQ, 
+          current_answers: {}, 
+          feedback: null
       } : null)
 
       setTimeRemaining(currentRoom.time_per_question)
       setTimerActive(true)
-    } catch (error) {
-      console.error(error)
-      alert('Failed to start')
+    } catch (error: any) {
+      console.error('Error starting game:', error)
+      alert(`Failed to start game: ${error.message}`)
     } finally {
       setLoading(false)
     }
@@ -308,6 +408,7 @@ export default function Team() {
 
   const submitAnswer = async () => {
     if (!currentRoom || !user || selectedAnswer === null) return
+
     try {
       const currentAnswers = currentRoom.current_answers || {}
       currentAnswers[user.id] = {
@@ -315,38 +416,55 @@ export default function Team() {
         user_email: user.email,
         team_number: participants.find(p => p.user_id === user.id)?.team_number
       }
-      await supabase.from('team_rooms').update({ current_answers: currentAnswers }).eq('id', currentRoom.id)
-    } catch (error) { console.error(error) }
+
+      await supabase
+        .from('team_rooms')
+        .update({ current_answers: currentAnswers })
+        .eq('id', currentRoom.id)
+
+    } catch (error) {
+      console.error('Error submitting answer:', error)
+    }
   }
 
   const checkTeamConsensus = async () => {
     if (!currentRoom) return
+
     const currentTeamMembers = participants.filter(p => p.team_number === currentRoom.current_turn_team_id)
     if (currentTeamMembers.length === 0) return
 
     const currentAnswers = currentRoom.current_answers || {}
-    const teamAnswers = currentTeamMembers.map(m => currentAnswers[m.user_id]).filter(a => a !== undefined)
+    const teamAnswers = currentTeamMembers
+        .map(member => currentAnswers[member.user_id])
+        .filter(answer => answer !== undefined)
 
     if (teamAnswers.length === currentTeamMembers.length && teamAnswers.length > 0) {
         const firstAnswer = teamAnswers[0]?.answer
-        const allSame = teamAnswers.every(a => a.answer === firstAnswer)
+        const allSame = teamAnswers.every(answer => answer.answer === firstAnswer)
+
         if (allSame) {
-            console.log('✅ Consensus detected by Host')
-            setTimeout(() => { advanceToNextQuestion(firstAnswer) }, 1000)
+            console.log('✅ Consensus reached detected by Host')
+            setTimeout(() => {
+                advanceToNextQuestion(firstAnswer)
+            }, 1000)
         }
     }
   }
 
-  // --- CORE GAME LOGIC WITH FIX ---
+  // --- CORE GAME LOGIC ---
   const advanceToNextQuestion = async (teamAnswer: string | number) => {
     if (!currentRoom || currentRoom.created_by !== user?.id) return
+
+    // Defensive check: Ensure team_questions exists
     if (!currentRoom.team_questions || Object.keys(currentRoom.team_questions).length === 0) {
+      console.error("❌ Critical Error: team_questions is missing from room state");
+      // Attempt to refresh
       const { data } = await supabase.from('team_rooms').select('*').eq('id', currentRoom.id).single();
       if (data) setCurrentRoom(data as ExtendedTeamRoom);
       return;
     }
 
-    // --- GUARD CLAUSE: Check if current question exists before accessing properties ---
+    // GUARD CLAUSE: Ensure current question exists
     const currentQ = currentRoom.current_question as GameQuestion | null;
     if (!currentQ) {
         console.error("❌ Error: Attempted to check answer, but current_question is null/undefined.");
@@ -364,26 +482,40 @@ export default function Team() {
         let nextQuestion = null
         const teamScores = { ...currentRoom.team_scores }
 
+        console.log(`📊 Result: ${isCorrect ? 'Correct' : 'Wrong'}, Stealing: ${isStealAttempt}, Owner: ${originalOwner}`)
+
         if (isCorrect) {
+            // --- CORRECT ANSWER ---
             teamScores[currentTeam.toString()] = (teamScores[currentTeam.toString()] || 0) + 1
+            
             if (isStealAttempt) {
+                 // Steal successful. T2 stays to take their own turn.
                  nextTeam = currentTeam
             } else {
+                 // Normal correct. Pass turn.
                  nextTeam = (currentTeam % 2) + 1
+                 // If T2 just finished, increment index
                  if (currentTeam === 2) nextIndex++
             }
+            // Load FRESH question
             nextQuestion = getQuestionFromDeck(currentRoom.team_questions, nextTeam, nextIndex)
         } else {
+            // --- WRONG ANSWER ---
             if (!isStealAttempt) {
+                // Failed on OWN question -> Give to opponent (Steal Opp)
                 nextTeam = (currentTeam % 2) + 1
-                nextQuestion = currentQ
+                nextQuestion = currentQ // Keep SAME question
             } else {
+                // Failed on STOLEN question -> Return to owner, move on
                 nextTeam = currentTeam 
+                // Load FRESH question (skip the one that wasn't stolen)
                 nextQuestion = getQuestionFromDeck(currentRoom.team_questions, nextTeam, nextIndex)
             }
         }
 
+        // --- CHECK GAME OVER ---
         if (nextIndex >= currentRoom.questions_per_team) {
+            // 1. Finish Game
             await supabase.from('team_rooms').update({
                 room_status: 'finished', 
                 team_scores: teamScores, 
@@ -391,6 +523,7 @@ export default function Team() {
                 updated_at: new Date().toISOString()
             }).eq('id', currentRoom.id)
 
+            // 2. Generate AI Feedback
             console.log("🧠 Generating Feedback...")
             try {
                 const { data: feedbackData, error: feedbackError } = await supabase.functions.invoke('generate-feedback', {
@@ -403,6 +536,7 @@ export default function Team() {
                 if (feedbackError) {
                     console.error("Feedback Gen Error:", feedbackError)
                 } else if (feedbackData) {
+                    console.log("✅ Feedback received")
                     await supabase.from('team_rooms').update({
                         feedback: feedbackData
                     }).eq('id', currentRoom.id)
@@ -412,9 +546,11 @@ export default function Team() {
             }
 
         } else {
+            // Continue Game
             if (nextQuestion) {
                 (nextQuestion as GameQuestion).owner_team_id = nextTeam
             }
+            
             await supabase.from('team_rooms').update({
                 current_turn_team_id: nextTeam,
                 current_question_index: nextIndex,
@@ -447,6 +583,7 @@ export default function Team() {
     return `${mins}:${secs.toString().padStart(2, '0')}`
   }
 
+  // --- RENDER ---
   const isRoomCreator = currentRoom?.created_by === user?.id
   const currentQuestion = currentRoom?.current_question as GameQuestion | null
   const currentAnswers = currentRoom?.current_answers || {}
@@ -460,6 +597,7 @@ export default function Team() {
   const teamAnswers = currentTeamMembers.map(m => currentAnswers[m.user_id]).filter(a => a !== undefined)
   const hasConsensus = teamAnswers.length === currentTeamMembers.length && teamAnswers.every(a => a.answer === teamAnswers[0]?.answer)
 
+  // --- VIEW: GAME FINISHED ---
   if (currentRoom?.room_status === 'finished') {
     const sortedTeams = Object.entries(currentRoom.team_scores || {}).sort(([,a], [,b]) => (b as number) - (a as number))
     const feedback = currentRoom.feedback
@@ -544,6 +682,7 @@ export default function Team() {
     )
   }
 
+  // --- VIEW: IN PROGRESS ---
   if (currentRoom && currentRoom.room_status === 'in_progress') {
     return (
       <div className="max-w-4xl mx-auto space-y-6 px-4">
@@ -682,6 +821,40 @@ export default function Team() {
     )
   }
 
+  // --- VIEW: LOBBY ---
+  if (currentRoom && currentRoom.room_status === 'lobby') {
+    return (
+      <div className="max-w-4xl mx-auto space-y-6 px-4">
+        <div className="flex justify-between items-center">
+            <div><h1 className="text-2xl font-bold text-gray-900">{currentRoom.name}</h1><p className="text-gray-600">Code: <span className="font-mono font-bold">{currentRoom.code}</span></p></div>
+            <div className="flex space-x-2"><button onClick={leaveRoom} className="btn-secondary">Leave</button>{isRoomCreator && <button onClick={() => deleteRoom(currentRoom.id)} className="btn-secondary text-red-600 border-red-200"><Trash2 className="w-4 h-4" /> Delete</button>}</div>
+        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="card">
+            <h2 className="text-lg font-semibold text-gray-900 mb-4">Settings</h2>
+            <div className="space-y-3 text-sm">
+                <div className="flex justify-between"><span className="text-gray-600">Teams:</span><span className="font-medium">2 (Fixed)</span></div>
+                <div className="flex justify-between"><span className="text-gray-600">Questions/Team:</span><span className="font-medium">{currentRoom.questions_per_team}</span></div>
+            </div>
+            {isRoomCreator && <div className="mt-6"><button onClick={startGame} disabled={loading || participants.length < 2} className="btn-primary w-full">{loading ? <Loader className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4 mr-2" />} Start Game</button></div>}
+          </div>
+          <div className="card">
+            <h2 className="text-lg font-semibold text-gray-900 mb-4">Teams</h2>
+            <div className="space-y-4">
+                {[1, 2].map(teamNum => (
+                    <div key={teamNum} className="border border-gray-200 rounded-lg p-3">
+                        <div className="flex justify-between mb-2"><h3 className="font-medium">Team {teamNum}</h3><span className="text-sm text-gray-500">{participants.filter(p => p.team_number === teamNum).length} members</span></div>
+                        <div className="space-y-1">{participants.filter(p => p.team_number === teamNum).map(m => <div key={m.id} className="text-sm text-gray-700">{m.user_email}</div>)}</div>
+                    </div>
+                ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // --- VIEW: MAIN MENU ---
   return (
     <div className="max-w-4xl mx-auto space-y-6 px-4">
         <h1 className="text-2xl font-bold text-gray-900">Team Challenge</h1>
