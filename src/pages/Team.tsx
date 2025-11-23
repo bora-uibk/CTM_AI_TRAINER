@@ -756,7 +756,7 @@ export default function Team() {
                     <div className="space-y-4">
                         <input type="text" value={roomName} onChange={e => setRoomName(e.target.value)} placeholder="Room Name" className="input-field" />
                         <div className="grid grid-cols-2 gap-2">
-                             <div><label className="text-xs text-gray-600">Questions</label><select value={roomSettings.questionsPerTeam} onChange={e => setRoomSettings(p => ({...p, questionsPerTeam: parseInt(e.target.value)}))} className="input-field text-sm">{[5,10,15,20].map(n=><option key={n} value={n}>{n}</option>)}</select></div>
+                             <div><label className="text-xs text-gray-600">Questions</label><select value={roomSettings.questionsPerTeam} onChange={e => setRoomSettings(p => ({...p, questionsPerTeam: parseInt(e.target.value)}))} className="input-field text-sm">{[1,2,3,4].map(n=><option key={n} value={n}>{n}</option>)}</select></div>
                              <div><label className="text-xs text-gray-600">Time (s)</label><select value={roomSettings.timePerQuestion} onChange={e => setRoomSettings(p => ({...p, timePerQuestion: parseInt(e.target.value)}))} className="input-field text-sm">{[30,60,90,120].map(n=><option key={n} value={n}>{n}</option>)}</select></div>
                         </div>
                         <div className="flex space-x-2"><button onClick={createRoom} disabled={!roomName.trim() || loading} className="btn-primary flex-1">Create</button><button onClick={() => setShowCreateRoom(false)} className="btn-secondary">Cancel</button></div>
