@@ -762,7 +762,7 @@ export default function Team() {
       max={99}
       value={roomSettings.questionsPerTeam}
       onChange={e =>
-        setRoomSettings(p => ({ ...p, questionsPerTeam: parseInt(e.target.value) || 0 }))
+        setRoomSettings(p => ({ ...p, questionsPerTeam: v === "" ? "" : parseInt(e.target.value) || 0 }))
       }
       className="input-field text-sm"
     />
