@@ -4,9 +4,9 @@ import { useAuth } from '../contexts/AuthContext'
 import { Upload, FileText, Download, Trash2, Loader, CircleCheck as CheckCircle, CircleAlert as AlertCircle, Check, Settings } from 'lucide-react'
 import * as pdfjsLib from 'pdfjs-dist'
 
-// Initialize PDF.js worker
-// We use a CDN to avoid complex build configurations with Vite/Webpack
-pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`
+// --- FIX: Use JSDelivr to ensure the worker version matches the installed library version ---
+// We explicitly point to the 'build/pdf.worker.min.js' which is the standard build output
+pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.js`
 
 interface Document {
   id: string
@@ -73,15 +73,14 @@ export default function Documents() {
     setTimeout(() => setMessage(null), 5000)
   }
 
-  /**
-   * IMPROVED PDF EXTRACTION
-   * Uses pdfjs-dist to correctly read compressed streams and add Page Metadata.
-   */
   const extractTextFromPDF = async (file: File): Promise<string> => {
     return new Promise(async (resolve, reject) => {
       try {
         const arrayBuffer = await file.arrayBuffer()
-        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
+        
+        // Load the PDF document
+        const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer })
+        const pdf = await loadingTask.promise
         
         let fullText = ''
         const totalPages = pdf.numPages
@@ -96,8 +95,7 @@ export default function Documents() {
             .map((item: any) => item.str)
             .join(' ')
           
-          // IMPORTANT: We inject the Page Number into the text.
-          // This allows the RAG system to cite specific pages later.
+          // Add explicit page markers for the AI to reference later
           fullText += `\n--- Page ${i} ---\n${pageText}\n`
         }
 
@@ -108,7 +106,8 @@ export default function Documents() {
         }
       } catch (error) {
         console.error('PDF parsing error:', error)
-        resolve(`[PDF Document: ${file.name}] - Failed to parse PDF structure.`)
+        // Fallback: resolve with empty string or error message so upload doesn't hang
+        resolve(`[PDF Document: ${file.name}] - Failed to parse PDF structure. Error: ${(error as any).message}`)
       }
     })
   }
@@ -156,7 +155,7 @@ export default function Documents() {
       if (uploadError) throw uploadError
 
       // Process document with edge function
-      setUploadProgress('Processing embeddings...')
+      setUploadProgress('Processing embeddings (this may take a moment)...')
       const { data: processData, error: processError } = await supabase.functions
         .invoke('process-document', {
           body: {
@@ -398,7 +397,7 @@ export default function Documents() {
                     : 'border-gray-200 hover:bg-gray-50'
                 }`}
               >
-                <div className="flex items-start sm:items-center space-x-3 flex-1" onClick={() => toggleDocumentSelection(doc.id)}>
+                <div className="flex items-start sm:items-center space-x-3 flex-1 cursor-pointer" onClick={() => toggleDocumentSelection(doc.id)}>
                   <button
                     className={`flex-shrink-0 w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${
                       selectedDocuments.has(doc.id)
