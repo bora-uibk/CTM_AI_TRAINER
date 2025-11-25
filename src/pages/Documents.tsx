@@ -2,6 +2,11 @@ import React, { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 import { Upload, FileText, Download, Trash2, Loader, CircleCheck as CheckCircle, CircleAlert as AlertCircle, Check, Settings } from 'lucide-react'
+import * as pdfjsLib from 'pdfjs-dist'
+
+// Initialize PDF.js worker
+// We use a CDN to avoid complex build configurations with Vite/Webpack
+pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`
 
 interface Document {
   id: string
@@ -68,46 +73,43 @@ export default function Documents() {
     setTimeout(() => setMessage(null), 5000)
   }
 
+  /**
+   * IMPROVED PDF EXTRACTION
+   * Uses pdfjs-dist to correctly read compressed streams and add Page Metadata.
+   */
   const extractTextFromPDF = async (file: File): Promise<string> => {
-    return new Promise((resolve) => {
-      const reader = new FileReader()
-      reader.onload = async (e) => {
-        try {
-          const arrayBuffer = e.target?.result as ArrayBuffer
-          const uint8Array = new Uint8Array(arrayBuffer)
+    return new Promise(async (resolve, reject) => {
+      try {
+        const arrayBuffer = await file.arrayBuffer()
+        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
+        
+        let fullText = ''
+        const totalPages = pdf.numPages
+
+        // Iterate through every page
+        for (let i = 1; i <= totalPages; i++) {
+          const page = await pdf.getPage(i)
+          const textContent = await page.getTextContent()
           
-          // Simple text extraction - look for text between stream objects
-          const text = new TextDecoder().decode(uint8Array)
-          const textMatches = text.match(/stream\s*(.*?)\s*endstream/gs)
+          // Extract text items and add spaces/newlines
+          const pageText = textContent.items
+            .map((item: any) => item.str)
+            .join(' ')
           
-          if (textMatches) {
-            let extractedText = ''
-            textMatches.forEach(match => {
-              const content = match.replace(/stream\s*|\s*endstream/g, '')
-              // Basic cleanup of PDF encoding
-              const cleaned = content
-                .replace(/[^\x20-\x7E\n\r\t]/g, ' ')
-                .replace(/\s+/g, ' ')
-                .trim()
-              if (cleaned.length > 10) {
-                extractedText += cleaned + ' '
-              }
-            })
-            
-            if (extractedText.trim().length > 100) {
-              resolve(extractedText.trim())
-            } else {
-              resolve(`[PDF Document: ${file.name}] - Text extraction failed. Please ensure the PDF contains selectable text.`)
-            }
-          } else {
-            resolve(`[PDF Document: ${file.name}] - No readable text found. This may be a scanned document.`)
-          }
-        } catch (error) {
-          console.error('PDF text extraction error:', error)
-          resolve(`[PDF Document: ${file.name}] - Text extraction failed.`)
+          // IMPORTANT: We inject the Page Number into the text.
+          // This allows the RAG system to cite specific pages later.
+          fullText += `\n--- Page ${i} ---\n${pageText}\n`
         }
+
+        if (fullText.trim().length > 0) {
+          resolve(fullText)
+        } else {
+          resolve(`[PDF Document: ${file.name}] - No selectable text found. This might be a scanned image.`)
+        }
+      } catch (error) {
+        console.error('PDF parsing error:', error)
+        resolve(`[PDF Document: ${file.name}] - Failed to parse PDF structure.`)
       }
-      reader.readAsArrayBuffer(file)
     })
   }
 
@@ -137,7 +139,7 @@ export default function Documents() {
       // Extract text content
       let textContent = ''
       if (file.type === 'application/pdf') {
-        setUploadProgress('Extracting text from PDF...')
+        setUploadProgress('Extracting text layers from PDF...')
         textContent = await extractTextFromPDF(file)
       } else {
         setUploadProgress('Reading text file...')
@@ -154,7 +156,7 @@ export default function Documents() {
       if (uploadError) throw uploadError
 
       // Process document with edge function
-      setUploadProgress('Processing document...')
+      setUploadProgress('Processing embeddings...')
       const { data: processData, error: processError } = await supabase.functions
         .invoke('process-document', {
           body: {
