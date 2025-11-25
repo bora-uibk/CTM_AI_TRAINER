@@ -4,9 +4,9 @@ import { useAuth } from '../contexts/AuthContext'
 import { Upload, FileText, Download, Trash2, Loader, CircleCheck as CheckCircle, CircleAlert as AlertCircle, Check, Settings } from 'lucide-react'
 import * as pdfjsLib from 'pdfjs-dist'
 
-// --- FIX: Use the legacy build that doesn't require ES modules ---
-// The legacy build works better in various environments and doesn't have the same CORS issues
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`
+// --- FIX: Disable worker to avoid CORS and module loading issues ---
+// This makes PDF parsing synchronous but more reliable in web environments
+pdfjsLib.GlobalWorkerOptions.workerSrc = ''
 
 interface Document {
   id: string
@@ -74,49 +74,46 @@ export default function Documents() {
   }
 
   const extractTextFromPDF = async (file: File): Promise<string> => {
-    return new Promise(async (resolve, reject) => {
-      try {
-        const arrayBuffer = await file.arrayBuffer()
-        
-        // Load the PDF document with explicit worker configuration
-        const loadingTask = pdfjsLib.getDocument({
-          data: arrayBuffer,
-          // Disable streaming and range requests for better compatibility
-          disableAutoFetch: false,
-          disableStream: false,
-          disableRange: false
-        })
-        
-        const pdf = await loadingTask.promise
-        
-        let fullText = ''
-        const totalPages = pdf.numPages
+    try {
+      const arrayBuffer = await file.arrayBuffer()
+      
+      // Load the PDF document without worker (synchronous mode)
+      const loadingTask = pdfjsLib.getDocument({
+        data: arrayBuffer,
+        useWorkerFetch: false,
+        isEvalSupported: false,
+        useSystemFonts: true
+      })
+      
+      const pdf = await loadingTask.promise
+      
+      let fullText = ''
+      const totalPages = pdf.numPages
 
-        // Iterate through every page
-        for (let i = 1; i <= totalPages; i++) {
-          const page = await pdf.getPage(i)
-          const textContent = await page.getTextContent()
-          
-          // Extract text items and add spaces/newlines
-          const pageText = textContent.items
-            .map((item: any) => item.str)
-            .join(' ')
-          
-          // Add explicit page markers for the AI to reference later
-          fullText += `\n--- Page ${i} ---\n${pageText}\n`
-        }
-
-        if (fullText.trim().length > 0) {
-          resolve(fullText)
-        } else {
-          resolve(`[PDF Document: ${file.name}] - No selectable text found. This might be a scanned image.`)
-        }
-      } catch (error) {
-        console.error('PDF parsing error:', error)
-        // Fallback: resolve with error message so upload doesn't hang
-        resolve(`[PDF Document: ${file.name}] - Failed to parse PDF structure. Error: ${(error as any).message}`)
+      // Iterate through every page
+      for (let i = 1; i <= totalPages; i++) {
+        const page = await pdf.getPage(i)
+        const textContent = await page.getTextContent()
+        
+        // Extract text items and add spaces/newlines
+        const pageText = textContent.items
+          .map((item: any) => item.str)
+          .join(' ')
+        
+        // Add explicit page markers for the AI to reference later
+        fullText += `\n--- Page ${i} ---\n${pageText}\n`
       }
-    })
+
+      if (fullText.trim().length > 0) {
+        return fullText
+      } else {
+        return `[PDF Document: ${file.name}] - No selectable text found. This might be a scanned image.`
+      }
+    } catch (error) {
+      console.error('PDF parsing error:', error)
+      // Fallback: return error message so upload doesn't hang
+      return `[PDF Document: ${file.name}] - Failed to parse PDF structure. Error: ${(error as any).message}`
+    }
   }
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
