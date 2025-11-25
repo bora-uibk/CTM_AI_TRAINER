@@ -1,153 +1,177 @@
-import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { GoogleGenerativeAI } from 'npm:@google/generative-ai@0.24.1'
-
+import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
+import { GoogleGenerativeAI } from 'npm:@google/generative-ai@0.24.1';
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-}
-
-serve(async (req) => {
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type'
+};
+serve(async (req)=>{
+  // Handle CORS
   if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders })
+    return new Response('ok', {
+      headers: corsHeaders
+    });
   }
-
   try {
-    const { questions, answers, score, totalQuestions } = await req.json()
-
-    if (!questions || !answers) {
-      throw new Error('Questions and answers are required')
-    }
-
-    // Generate AI feedback based on performance
-    const feedback = await generateFeedbackWithGemini(questions, answers, score, totalQuestions)
-
-    return new Response(
-      JSON.stringify({ feedback }),
-      {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 200,
+    // 1. Parse the input
+    const payload = await req.json();
+    console.log("📝 Feedback Request Mode:", payload.mode || "team (legacy)");
+    let result;
+    // 2. Branch Logic based on Mode
+    if (payload.mode === 'individual') {
+      // --- NEW INDIVIDUAL LOGIC ---
+      if (!payload.questions || payload.score === undefined) {
+        throw new Error('Questions and Score are required for individual mode');
       }
-    )
+      result = await generateIndividualFeedback(payload.questions, payload.answers, payload.score, payload.totalQuestions);
+    } else {
+      // --- EXISTING TEAM LOGIC (Preserved) ---
+      // Fallback for existing team challenge calls that send { scores, questions }
+      const scores = payload.scores;
+      const questions = payload.questions;
+      if (!scores || !questions) {
+        throw new Error('Scores and Questions are required for team analysis');
+      }
+      result = await generateGameFeedback(scores, questions);
+    }
+    // 3. Return as JSON
+    return new Response(JSON.stringify(result), {
+      headers: {
+        ...corsHeaders,
+        'Content-Type': 'application/json'
+      },
+      status: 200
+    });
   } catch (error) {
-    console.error('Feedback generation error:', error)
-    
-    // Return fallback feedback
-    const fallbackFeedback = generateFallbackFeedback(score || 0, totalQuestions || 5)
-    
-    return new Response(
-      JSON.stringify({ feedback: fallbackFeedback }),
-      {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 200,
-      }
-    )
+    console.error('Feedback generation error:', error);
+    // Fallback Response
+    return new Response(JSON.stringify({
+      summary: "Feedback unavailable.",
+      strengths: [
+        "Quiz Completed"
+      ],
+      weak_points: [],
+      detailed_analysis: "Unable to generate AI analysis at this time. Please review your score above.",
+      feedback: "Unable to generate AI analysis at this time." // Fallback for simple UI
+    }), {
+      headers: {
+        ...corsHeaders,
+        'Content-Type': 'application/json'
+      },
+      status: 200
+    });
   }
-})
-
-async function generateFeedbackWithGemini(questions: any[], answers: any[], score: number, totalQuestions: number) {
-  try {
-    const apiKey = Deno.env.get('GEMINI_API_KEY')
-    if (!apiKey) {
-      console.error('GEMINI_API_KEY not found')
-      throw new Error('Gemini API key not configured')
+});
+// ==========================================
+// 1. NEW: INDIVIDUAL QUIZ FEEDBACK
+// ==========================================
+async function generateIndividualFeedback(questions, userAnswers, score, total) {
+  const apiKey = Deno.env.get('GEMINI_API_KEY');
+  if (!apiKey) throw new Error('Gemini API key not configured');
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const model = genAI.getGenerativeModel({
+    model: 'gemini-flash-latest',
+    generationConfig: {
+      responseMimeType: "application/json"
     }
-
-    const genAI = new GoogleGenerativeAI(apiKey)
-    const model = genAI.getGenerativeModel({ 
-      model: 'gemini-1.5-flash',
-      generationConfig: {
-        temperature: 0.7,
-        topK: 40,
-        topP: 0.95,
-        maxOutputTokens: 1024,
-      }
-    })
-
-    // Analyze incorrect answers
-    const incorrectAnswers = []
-    const topicAreas = new Set()
-
-    for (let i = 0; i < questions.length; i++) {
-      const question = questions[i]
-      const userAnswer = answers[i]
+  });
+  // Prepare data summary for AI
+  const percentage = Math.round(score / total * 100);
+  // Map questions to topics/concepts
+  const questionSummary = questions.map((q, index)=>{
+    const userAnswer = userAnswers[index];
+    // Determine correctness based on type
+    let isCorrect = false;
+    if (q.type === 'single_choice') isCorrect = Number(userAnswer) === Number(q.correct_answer);
+    else if (q.type === 'multi_choice') isCorrect = JSON.stringify(Array.isArray(userAnswer) ? userAnswer.sort() : []) === JSON.stringify(Array.isArray(q.correct_answer) ? q.correct_answer.sort() : []);
+    else if (q.type === 'input') isCorrect = String(userAnswer).trim().toLowerCase() === String(q.correct_answer).trim().toLowerCase();
+    return {
+      question: q.question.substring(0, 50) + "...",
+      topic: detectTopic(q.question),
+      correct: isCorrect
+    };
+  });
+  const prompt = `
+      Analyze this individual Formula Student engineering quiz performance.
       
-      if (userAnswer !== question.correct_answer) {
-        incorrectAnswers.push({
-          question: question.question,
-          userAnswer: question.type === 'multiple_choice' && question.options 
-            ? question.options[userAnswer] || 'No answer'
-            : userAnswer?.toString() || 'No answer',
-          correctAnswer: question.type === 'multiple_choice' && question.options
-            ? question.options[question.correct_answer]
-            : question.correct_answer?.toString(),
-          explanation: question.explanation,
-          difficulty: question.difficulty
-        })
+      STATS:
+      - Score: ${score} / ${total} (${percentage}%)
+      - Performance Data: ${JSON.stringify(questionSummary)}
 
-        // Extract topic areas from questions
-        const questionText = question.question.toLowerCase()
-        if (questionText.includes('engine') || questionText.includes('motor') || questionText.includes('displacement')) {
-          topicAreas.add('Engine and Powertrain')
-        } else if (questionText.includes('brake') || questionText.includes('braking')) {
-          topicAreas.add('Braking Systems')
-        } else if (questionText.includes('safety') || questionText.includes('roll cage') || questionText.includes('harness')) {
-          topicAreas.add('Safety Systems')
-        } else if (questionText.includes('chassis') || questionText.includes('frame') || questionText.includes('structure')) {
-          topicAreas.add('Chassis and Structure')
-        } else if (questionText.includes('suspension') || questionText.includes('damper') || questionText.includes('spring')) {
-          topicAreas.add('Suspension')
-        } else if (questionText.includes('aero') || questionText.includes('wing') || questionText.includes('downforce')) {
-          topicAreas.add('Aerodynamics')
-        } else if (questionText.includes('electrical') || questionText.includes('wiring') || questionText.includes('battery')) {
-          topicAreas.add('Electrical Systems')
-        } else {
-          topicAreas.add('General Rules and Regulations')
-        }
+      TASK:
+      Act as a Formula Student Faculty Advisor. Provide a brief, encouraging, but technical critique.
+      Identify which topics they know well vs what they need to study (Rulebook, Engineering Calculation, etc.).
+
+      OUTPUT FORMAT (Strict JSON):
+      {
+        "summary": "One sentence summary of the performance.",
+        "strengths": ["Short bullet point 1", "Short bullet point 2"],
+        "weak_points": ["Short bullet point 1", "Short bullet point 2"],
+        "feedback": "A short paragraph (approx 3 sentences) giving specific advice based on the missed questions.",
+        "detailed_analysis": "Same as feedback" 
       }
-    }
-
-    const percentage = Math.round((score / totalQuestions) * 100)
-    
-    const prompt = `As a Formula Student expert coach, provide personalized feedback for a student who scored ${score}/${totalQuestions} (${percentage}%) on a quiz.
-
-Incorrect Answers Analysis:
-${incorrectAnswers.map((item, index) => `
-${index + 1}. Question: ${item.question}
-   Student Answer: ${item.userAnswer}
-   Correct Answer: ${item.correctAnswer}
-   Explanation: ${item.explanation}
-   Difficulty: ${item.difficulty}
-`).join('')}
-
-Areas that need improvement: ${Array.from(topicAreas).join(', ')}
-
-Please provide:
-1. Overall performance assessment
-2. Specific areas for improvement based on incorrect answers
-3. Study recommendations for the identified weak areas
-4. Encouragement and next steps
-
-Keep the feedback constructive, specific, and actionable. Focus on Formula Student knowledge gaps and provide concrete study suggestions.`
-
-    const result = await model.generateContent(prompt)
-    const feedback = result.response.text()
-    
-    return feedback
-  } catch (error) {
-    console.error('Error generating feedback with Gemini:', error)
-    throw error
-  }
+    `;
+  const result = await model.generateContent(prompt);
+  return JSON.parse(result.response.text());
 }
+// ==========================================
+// 2. EXISTING: TEAM GAME FEEDBACK
+// ==========================================
+async function generateGameFeedback(scores, questions) {
+  const apiKey = Deno.env.get('GEMINI_API_KEY');
+  if (!apiKey) throw new Error('Gemini API key not configured');
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const model = genAI.getGenerativeModel({
+    model: 'gemini-flash-latest',
+    generationConfig: {
+      responseMimeType: "application/json"
+    }
+  });
+  const team1Score = scores['1'] || 0;
+  const team2Score = scores['2'] || 0;
+  // Extract Topics
+  const allQuestions = [
+    ...questions['1'] || [],
+    ...questions['2'] || []
+  ];
+  const topicSet = new Set();
+  allQuestions.forEach((q)=>{
+    topicSet.add(detectTopic(q.question));
+  });
+  const topics = Array.from(topicSet).join(', ');
+  const prompt = `
+    Analyze this Formula Student quiz match between two teams.
+    
+    DATA:
+    - Team 1 Score: ${team1Score} points
+    - Team 2 Score: ${team2Score} points
+    - Topics Covered: ${topics}
+    - Total Questions: ${allQuestions.length}
 
-function generateFallbackFeedback(score: number, totalQuestions: number) {
-  const percentage = Math.round((score / totalQuestions) * 100)
-  
-  if (percentage >= 80) {
-    return `Excellent work! You scored ${score}/${totalQuestions} (${percentage}%). You have a strong understanding of Formula Student rules and regulations. Keep up the great work and continue reviewing the latest rulebook updates.`
-  } else if (percentage >= 60) {
-    return `Good effort! You scored ${score}/${totalQuestions} (${percentage}%). You have a solid foundation but there's room for improvement. Focus on reviewing the areas where you made mistakes and practice with more questions.`
-  } else {
-    return `You scored ${score}/${totalQuestions} (${percentage}%). Don't worry - Formula Student rules can be complex! I recommend spending more time with the rulebook, focusing on safety requirements, technical regulations, and competition procedures. Practice regularly to improve your knowledge.`
-  }
+    TASK:
+    Act as a Formula Student Judge giving a post-game debrief. 
+    Compare the performance. If scores are low, assume the questions were difficult rules questions. 
+    If scores are high, commend their rulebook knowledge.
+
+    OUTPUT FORMAT (Strict JSON):
+    {
+      "summary": "A 2-sentence overview of who won and the general difficulty level.",
+      "strengths": ["Short bullet point 1", "Short bullet point 2"],
+      "weak_points": ["Short bullet point 1", "Short bullet point 2"],
+      "detailed_analysis": "A paragraph offering advice on the topics mentioned above."
+    }
+  `;
+  const result = await model.generateContent(prompt);
+  return JSON.parse(result.response.text());
+}
+// Helper to tag topics (Shared between both modes)
+function detectTopic(questionText) {
+  const text = questionText.toLowerCase();
+  if (text.includes('brake') || text.includes('stopping')) return 'Braking';
+  if (text.includes('engine') || text.includes('intake') || text.includes('fuel') || text.includes('motor') || text.includes('power')) return 'Powertrain';
+  if (text.includes('chassis') || text.includes('frame') || text.includes('tube') || text.includes('hoop')) return 'Chassis/Structural';
+  if (text.includes('suspension') || text.includes('tire') || text.includes('wheel') || text.includes('spring') || text.includes('damper')) return 'Suspension/VD';
+  if (text.includes('electrical') || text.includes('battery') || text.includes('voltage') || text.includes('accumulator') || text.includes('tsal') || text.includes('bspd')) return 'EV/Electronics';
+  if (text.includes('aero') || text.includes('wing') || text.includes('drag') || text.includes('downforce')) return 'Aerodynamics';
+  if (text.includes('cost') || text.includes('business') || text.includes('presentation')) return 'Static Events';
+  return 'General Rules';
 }
