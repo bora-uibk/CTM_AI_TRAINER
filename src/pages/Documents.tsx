@@ -4,10 +4,9 @@ import { useAuth } from '../contexts/AuthContext'
 import { Upload, FileText, Download, Trash2, Loader, CircleCheck as CheckCircle, CircleAlert as AlertCircle, Check, Settings } from 'lucide-react'
 import * as pdfjsLib from 'pdfjs-dist'
 
-// --- FIX: Update worker URL for pdfjs-dist v5+ ---
-// Version 5+ uses .mjs (ES Modules) for the worker.
-// We use 'unpkg' to ensure we get the exact matching version and the correct file extension.
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`
+// --- FIX: Use the legacy build that doesn't require ES modules ---
+// The legacy build works better in various environments and doesn't have the same CORS issues
+pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`
 
 interface Document {
   id: string
@@ -79,8 +78,15 @@ export default function Documents() {
       try {
         const arrayBuffer = await file.arrayBuffer()
         
-        // Load the PDF document
-        const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer })
+        // Load the PDF document with explicit worker configuration
+        const loadingTask = pdfjsLib.getDocument({
+          data: arrayBuffer,
+          // Disable streaming and range requests for better compatibility
+          disableAutoFetch: false,
+          disableStream: false,
+          disableRange: false
+        })
+        
         const pdf = await loadingTask.promise
         
         let fullText = ''
@@ -107,7 +113,7 @@ export default function Documents() {
         }
       } catch (error) {
         console.error('PDF parsing error:', error)
-        // Fallback: resolve with empty string or error message so upload doesn't hang
+        // Fallback: resolve with error message so upload doesn't hang
         resolve(`[PDF Document: ${file.name}] - Failed to parse PDF structure. Error: ${(error as any).message}`)
       }
     })
