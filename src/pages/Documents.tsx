@@ -2,11 +2,6 @@ import React, { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 import { Upload, FileText, Download, Trash2, Loader, CircleCheck as CheckCircle, CircleAlert as AlertCircle, Check, Settings } from 'lucide-react'
-import * as pdfjsLib from 'pdfjs-dist'
-
-// --- FIX: Disable worker to avoid CORS and module loading issues ---
-// This makes PDF parsing synchronous but more reliable in web environments
-pdfjsLib.GlobalWorkerOptions.workerSrc = ''
 
 interface Document {
   id: string
@@ -33,10 +28,29 @@ export default function Documents() {
   const [uploadProgress, setUploadProgress] = useState('')
   const [message, setMessage] = useState<Message | null>(null)
   const [selectedDocuments, setSelectedDocuments] = useState<Set<string>>(new Set())
+  const [pdfLibReady, setPdfLibReady] = useState(false)
 
   useEffect(() => {
     fetchDocuments()
     loadSelectedDocuments()
+    
+    // --- FIX: Load Stable PDF.js from CDN ---
+    // We load v3.11.174 which is robust and doesn't have the .mjs worker issues
+    const script = window.document.createElement('script')
+    script.src = '//cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js'
+    script.async = true
+    script.onload = () => {
+      // Set the worker source to match the library version exactly
+      (window as any).pdfjsLib.GlobalWorkerOptions.workerSrc = '//cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'
+      setPdfLibReady(true)
+    }
+    window.document.body.appendChild(script)
+
+    return () => {
+      if (window.document.body.contains(script)) {
+        window.document.body.removeChild(script)
+      }
+    }
   }, [])
 
   const loadSelectedDocuments = () => {
@@ -74,46 +88,44 @@ export default function Documents() {
   }
 
   const extractTextFromPDF = async (file: File): Promise<string> => {
-    try {
-      const arrayBuffer = await file.arrayBuffer()
-      
-      // Load the PDF document without worker (synchronous mode)
-      const loadingTask = pdfjsLib.getDocument({
-        data: arrayBuffer,
-        useWorkerFetch: false,
-        isEvalSupported: false,
-        useSystemFonts: true
-      })
-      
-      const pdf = await loadingTask.promise
-      
-      let fullText = ''
-      const totalPages = pdf.numPages
-
-      // Iterate through every page
-      for (let i = 1; i <= totalPages; i++) {
-        const page = await pdf.getPage(i)
-        const textContent = await page.getTextContent()
-        
-        // Extract text items and add spaces/newlines
-        const pageText = textContent.items
-          .map((item: any) => item.str)
-          .join(' ')
-        
-        // Add explicit page markers for the AI to reference later
-        fullText += `\n--- Page ${i} ---\n${pageText}\n`
-      }
-
-      if (fullText.trim().length > 0) {
-        return fullText
-      } else {
-        return `[PDF Document: ${file.name}] - No selectable text found. This might be a scanned image.`
-      }
-    } catch (error) {
-      console.error('PDF parsing error:', error)
-      // Fallback: return error message so upload doesn't hang
-      return `[PDF Document: ${file.name}] - Failed to parse PDF structure. Error: ${(error as any).message}`
+    if (!pdfLibReady || !(window as any).pdfjsLib) {
+      throw new Error('PDF Library not loaded yet. Please try again in a few seconds.')
     }
+
+    return new Promise(async (resolve, reject) => {
+      try {
+        const arrayBuffer = await file.arrayBuffer()
+        
+        // Use the window-scoped library
+        const loadingTask = (window as any).pdfjsLib.getDocument({ data: arrayBuffer })
+        const pdf = await loadingTask.promise
+        
+        let fullText = ''
+        const totalPages = pdf.numPages
+
+        // Iterate through every page
+        for (let i = 1; i <= totalPages; i++) {
+          const page = await pdf.getPage(i)
+          const textContent = await page.getTextContent()
+          
+          const pageText = textContent.items
+            .map((item: any) => item.str)
+            .join(' ')
+          
+          // Add explicit page markers
+          fullText += `\n--- Page ${i} ---\n${pageText}\n`
+        }
+
+        if (fullText.trim().length > 0) {
+          resolve(fullText)
+        } else {
+          resolve(`[PDF Document: ${file.name}] - No selectable text found. This might be a scanned image.`)
+        }
+      } catch (error) {
+        console.error('PDF parsing error:', error)
+        resolve(`[PDF Document: ${file.name}] - Failed to parse PDF. Error: ${(error as any).message}`)
+      }
+    })
   }
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -127,7 +139,6 @@ export default function Documents() {
       return
     }
 
-    // Validate file type
     const allowedTypes = ['application/pdf', 'text/plain']
     if (!allowedTypes.includes(file.type)) {
       showMessage('error', 'Only PDF and TXT files are supported')
@@ -241,8 +252,6 @@ export default function Documents() {
       newSelected.add(docId)
     }
     setSelectedDocuments(newSelected)
-    
-    // Store in localStorage for other components to access
     localStorage.setItem('selectedDocuments', JSON.stringify(Array.from(newSelected)))
   }
 
@@ -336,7 +345,7 @@ export default function Documents() {
               {uploadProgress}
             </p>
           )}
-          <label className="btn-primary cursor-pointer inline-block">
+          <label className={`btn-primary cursor-pointer inline-block ${!pdfLibReady ? 'opacity-50' : ''}`}>
             {uploading ? (
               <span className="flex items-center space-x-2">
                 <Loader className="w-4 h-4 animate-spin" />
@@ -350,9 +359,12 @@ export default function Documents() {
               className="hidden"
               accept=".pdf,.txt"
               onChange={handleFileUpload}
-              disabled={uploading}
+              disabled={uploading || !pdfLibReady}
             />
           </label>
+          {!pdfLibReady && !uploading && (
+            <p className="text-xs text-gray-400 mt-2">Initializing PDF Processor...</p>
+          )}
         </div>
       </div>
 
