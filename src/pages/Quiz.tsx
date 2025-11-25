@@ -18,15 +18,16 @@ import {
   BookOpen,
   Square,
   CheckSquare,
-  Type
+  Type,
+  Hash
 } from 'lucide-react'
 
-// 1. Define the flexible Question Interface
+// 1. Define Question Interface
 interface QuizQuestion {
   id: string
   type: 'single_choice' | 'multi_choice' | 'input'
   question: string
-  options: string[] // Empty if type is 'input'
+  options: string[] 
   correct_answer: string | number | number[] 
   explanation: string
   difficulty: string
@@ -35,22 +36,18 @@ interface QuizQuestion {
 export default function Quiz() {
   const { user } = useAuth()
   
-  // 2. State Management
+  // 2. State
   const [questions, setQuestions] = useState<QuizQuestion[]>([])
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0)
-  
-  // Flexible answer state: Number (single), Number[] (multi), String (input)
   const [selectedAnswer, setSelectedAnswer] = useState<any>(null)
-  
   const [showResult, setShowResult] = useState(false)
   const [score, setScore] = useState(0)
-  const [answers, setAnswers] = useState<any[]>([]) // Array to store all user answers
-  
+  const [answers, setAnswers] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
   const [generating, setGenerating] = useState(false)
   const [showSettings, setShowSettings] = useState(true)
   
-  // 3. Quiz Settings State (Restored)
+  // Settings State
   const [quizSettings, setQuizSettings] = useState({
     questionCount: 5,
     timeLimit: 10 // in minutes
@@ -61,8 +58,6 @@ export default function Quiz() {
   const [quizPaused, setQuizPaused] = useState(false)
   const [aiFeedback, setAiFeedback] = useState('')
   const [loadingFeedback, setLoadingFeedback] = useState(false)
-  
-  // Document Selection State
   const [selectedDocuments, setSelectedDocuments] = useState<Set<string>>(new Set())
   const [availableDocuments, setAvailableDocuments] = useState<any[]>([])
 
@@ -70,7 +65,6 @@ export default function Quiz() {
   const isLastQuestion = currentQuestionIndex === questions.length - 1
 
   // --- Effects ---
-
   useEffect(() => {
     let interval: NodeJS.Timeout
     if (quizStarted && !quizPaused && timeRemaining > 0) {
@@ -90,13 +84,10 @@ export default function Quiz() {
   useEffect(() => {
     fetchDocuments()
     const saved = localStorage.getItem('selectedDocuments')
-    if (saved) {
-      setSelectedDocuments(new Set(JSON.parse(saved)))
-    }
+    if (saved) setSelectedDocuments(new Set(JSON.parse(saved)))
   }, [])
 
-  // --- Helper Functions ---
-
+  // --- Helpers ---
   const fetchDocuments = async () => {
     try {
       const { data, error } = await supabase
@@ -106,7 +97,6 @@ export default function Quiz() {
 
       if (error) throw error
       
-      // Filter valid docs
       const validDocs = (data || []).filter(doc => 
         doc.content && 
         !doc.content.startsWith('[PDF Document:') && 
@@ -120,39 +110,59 @@ export default function Quiz() {
 
   const toggleDocumentSelection = (docId: string) => {
     const newSelected = new Set(selectedDocuments)
-    if (newSelected.has(docId)) {
-      newSelected.delete(docId)
-    } else {
-      newSelected.add(docId)
-    }
+    if (newSelected.has(docId)) newSelected.delete(docId)
+    else newSelected.add(docId)
     setSelectedDocuments(newSelected)
     localStorage.setItem('selectedDocuments', JSON.stringify(Array.from(newSelected)))
   }
 
-  // --- Logic: Generate Quiz ---
+  const handleRestart = () => {
+    setShowSettings(true)
+    resetQuiz()
+  }
+
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60)
+    const secs = seconds % 60
+    return `${mins}:${secs.toString().padStart(2, '0')}`
+  }
+
+  const getScoreColor = () => {
+    const percentage = (score / questions.length) * 100
+    if (percentage >= 80) return 'text-green-600'
+    if (percentage >= 60) return 'text-yellow-600'
+    return 'text-red-600'
+  }
+
+  // --- Logic: Generate & Run Quiz ---
   const generateQuiz = async () => {
     if (selectedDocuments.size === 0) {
-      alert("Please select at least one document (e.g., Rules or Past Quizzes) to generate questions from.")
+      alert("Please select at least one document.")
       return
+    }
+    
+    // Basic validation
+    if (quizSettings.questionCount < 1) {
+        alert("Please request at least 1 question.");
+        return;
     }
 
     setGenerating(true)
     try {
       const { data, error } = await supabase.functions.invoke('generate-quiz', {
         body: { 
-          count: quizSettings.questionCount, // Using the settings here
+          count: quizSettings.questionCount,
           selectedDocuments: Array.from(selectedDocuments)
         }
       })
-
       if (error) throw error
-
+      
       setQuestions(data.questions || [])
       resetQuiz(data.questions?.length || 0)
       setShowSettings(false)
     } catch (error) {
-      console.error('Error generating quiz:', error)
-      alert("Failed to generate quiz. Please ensure your documents are processed correctly.")
+      console.error(error)
+      alert("Failed to generate quiz.")
     } finally {
       setGenerating(false)
     }
@@ -172,7 +182,6 @@ export default function Quiz() {
 
   const startQuiz = () => {
     setQuizStarted(true)
-    // Set time based on settings
     setTimeRemaining(quizSettings.timeLimit * 60)
   }
 
@@ -182,19 +191,7 @@ export default function Quiz() {
     generateAIFeedback()
   }
 
-  const handleRestart = () => {
-    setShowSettings(true)
-    resetQuiz()
-  }
-
-  const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60)
-    const secs = seconds % 60
-    return `${mins}:${secs.toString().padStart(2, '0')}`
-  }
-
-  // --- Logic: Scoring & Answering ---
-
+  // --- Logic: Scoring ---
   const handleMultiChoiceSelect = (index: number) => {
     const current = (selectedAnswer as number[]) || []
     if (current.includes(index)) {
@@ -211,20 +208,17 @@ export default function Quiz() {
       return Number(userAns) === Number(correctAns)
     }
     if (type === 'multi_choice') {
-      // Compare arrays by sorting and stringifying
       const u = Array.isArray(userAns) ? userAns.sort().toString() : ''
       const c = Array.isArray(correctAns) ? correctAns.sort().toString() : ''
       return u === c
     }
     if (type === 'input') {
-      // String comparison: trim whitespace, insensitive case
       return String(userAns).trim().toLowerCase() === String(correctAns).trim().toLowerCase()
     }
     return false
   }
 
   const handleNext = () => {
-    // Validate input presence
     if (selectedAnswer === null) return
     if (Array.isArray(selectedAnswer) && selectedAnswer.length === 0) return
     if (typeof selectedAnswer === 'string' && selectedAnswer.trim() === '') return
@@ -234,7 +228,7 @@ export default function Quiz() {
     setAnswers(newAnswers)
 
     if (checkAnswer(selectedAnswer, currentQuestion.correct_answer, currentQuestion.type)) {
-      setScore(score + 1)
+      setScore(prev => prev + 1)
     }
 
     if (isLastQuestion) {
@@ -242,7 +236,7 @@ export default function Quiz() {
       setShowResult(true)
       generateAIFeedback()
     } else {
-      setCurrentQuestionIndex(currentQuestionIndex + 1)
+      setCurrentQuestionIndex(prev => prev + 1)
       setSelectedAnswer(null)
     }
   }
@@ -262,25 +256,17 @@ export default function Quiz() {
       if (error) throw error
       setAiFeedback(data.feedback || data.detailed_analysis || "Quiz completed.")
     } catch (error) {
-      console.error('Error generating feedback:', error)
+      console.error(error)
       setAiFeedback("Great job! (AI feedback unavailable)")
     } finally {
       setLoadingFeedback(false)
     }
   }
 
-  const getScoreColor = () => {
-    const percentage = (score / questions.length) * 100
-    if (percentage >= 80) return 'text-green-600'
-    if (percentage >= 60) return 'text-yellow-600'
-    return 'text-red-600'
-  }
-
-  // --- UI: Question Input Rendering ---
+  // --- UI: Render Input Types ---
   const renderQuestionInput = () => {
     const { type, options } = currentQuestion
 
-    // 1. Single Choice
     if (type === 'single_choice') {
       return (
         <div className="space-y-3">
@@ -310,7 +296,6 @@ export default function Quiz() {
       )
     }
 
-    // 2. Multi Choice
     if (type === 'multi_choice') {
       return (
         <div className="space-y-3">
@@ -342,7 +327,6 @@ export default function Quiz() {
       )
     }
 
-    // 3. Input (Calculation)
     if (type === 'input') {
       return (
         <div className="mt-6">
@@ -372,7 +356,7 @@ export default function Quiz() {
 
   // ==================== RENDER ====================
 
-  // 1. SETTINGS SCREEN (Lobby)
+  // 1. SETTINGS (LOBBY)
   if (showSettings) {
     return (
       <div className="max-w-2xl mx-auto px-4">
@@ -392,7 +376,7 @@ export default function Quiz() {
             <div className="border-2 border-gray-200 rounded-lg overflow-hidden">
               {availableDocuments.length === 0 ? (
                 <div className="p-4 text-center text-gray-500 bg-gray-50">
-                  No documents found. Go to "Documents" to upload Rulebooks.
+                  No documents found. Go to "Documents" to upload content.
                 </div>
               ) : (
                 <div className="max-h-48 overflow-y-auto divide-y divide-gray-100 bg-gray-50">
@@ -421,39 +405,46 @@ export default function Quiz() {
             </div>
           </div>
 
-          {/* RESTORED: Question Count & Time Limit Selectors */}
-          <div className="grid grid-cols-2 gap-4">
+          {/* INPUTS: Manual Number Inputs */}
+          <div className="grid grid-cols-2 gap-6">
             <div>
-              <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">
-                Questions
+              <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">
+                Question Count
               </label>
-              <select
-                value={quizSettings.questionCount}
-                onChange={(e) => setQuizSettings(prev => ({ ...prev, questionCount: parseInt(e.target.value) }))}
-                className="input-field w-full p-2 border rounded-md"
-              >
-                <option value={5}>5 Questions</option>
-                <option value={10}>10 Questions</option>
-                <option value={15}>15 Questions</option>
-                <option value={20}>20 Questions</option>
-              </select>
+              <div className="relative">
+                <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+                  <Hash className="h-5 w-5 text-gray-400" />
+                </div>
+                <input
+                  type="number"
+                  min="1"
+                  max="50"
+                  value={quizSettings.questionCount}
+                  onChange={(e) => setQuizSettings(prev => ({ ...prev, questionCount: Math.max(1, parseInt(e.target.value) || 0) }))}
+                  className="input-field pl-10 w-full"
+                  placeholder="e.g. 5"
+                />
+              </div>
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">
-                Time Limit
+              <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">
+                Time Limit (Mins)
               </label>
-              <select
-                value={quizSettings.timeLimit}
-                onChange={(e) => setQuizSettings(prev => ({ ...prev, timeLimit: parseInt(e.target.value) }))}
-                className="input-field w-full p-2 border rounded-md"
-              >
-                <option value={5}>5 Minutes</option>
-                <option value={10}>10 Minutes</option>
-                <option value={15}>15 Minutes</option>
-                <option value={20}>20 Minutes</option>
-                <option value={0}>No Limit</option>
-              </select>
+              <div className="relative">
+                <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+                  <Clock className="h-5 w-5 text-gray-400" />
+                </div>
+                <input
+                  type="number"
+                  min="0"
+                  max="120"
+                  value={quizSettings.timeLimit}
+                  onChange={(e) => setQuizSettings(prev => ({ ...prev, timeLimit: Math.max(0, parseInt(e.target.value) || 0) }))}
+                  className="input-field pl-10 w-full"
+                  placeholder="e.g. 10"
+                />
+              </div>
             </div>
           </div>
 
@@ -480,14 +471,14 @@ export default function Quiz() {
     )
   }
 
-  // 2. LOADING SCREEN
+  // 2. LOADING
   if (generating) {
     return (
       <div className="flex flex-col items-center justify-center h-64 px-4 text-center">
         <Loader className="w-12 h-12 animate-spin text-primary-600 mb-4" />
         <h2 className="text-lg font-semibold text-gray-900">Constructing Quiz...</h2>
         <p className="text-gray-500 mt-2 max-w-md">
-          The AI is analyzing your documents to create specific questions tailored to your selection.
+          Analyzing documents and generating questions...
         </p>
       </div>
     )
@@ -519,7 +510,7 @@ export default function Quiz() {
     )
   }
 
-  // 4. RESULTS SCREEN
+  // 4. RESULTS
   if (showResult) {
     return (
       <div className="max-w-3xl mx-auto px-4 pb-12">
@@ -558,12 +549,12 @@ export default function Quiz() {
 
         <div className="space-y-4">
           <h3 className="font-semibold text-gray-900 px-1 text-lg">Detailed Review</h3>
-          {questions.map((question, index) => {
-            const userAnswer = answers[index]
-            const isCorrect = checkAnswer(userAnswer, question.correct_answer, question.type)
+          {questions.map((q, i) => {
+            const userAns = answers[i]
+            const isCorrect = checkAnswer(userAns, q.correct_answer, q.type)
             
             return (
-              <div key={question.id} className={`p-5 border-2 rounded-xl ${isCorrect ? 'border-green-200 bg-green-50' : 'border-red-200 bg-red-50'}`}>
+              <div key={q.id} className={`p-5 border-2 rounded-xl ${isCorrect ? 'border-green-200 bg-green-50' : 'border-red-200 bg-red-50'}`}>
                 <div className="flex items-start gap-3">
                   <div className={`mt-1 flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center ${isCorrect ? 'bg-green-200 text-green-700' : 'bg-red-200 text-red-700'}`}>
                     {isCorrect ? <Check className="w-4 h-4" /> : <span className="text-xs font-bold">✕</span>}
@@ -571,44 +562,34 @@ export default function Quiz() {
                   <div className="flex-1">
                     <div className="mb-3">
                         <span className="text-xs font-bold uppercase tracking-wider opacity-70 mb-1 block">
-                            {question.type.replace('_', ' ')}
+                            {q.type.replace('_', ' ')}
                         </span>
                         <p className="font-bold text-gray-900 text-lg">
-                        {index + 1}. {question.question}
+                        {i + 1}. {q.question}
                         </p>
                     </div>
                     
-                    {/* Render Answer Review based on Type */}
-                    {question.type === 'input' ? (
-                        <div className="bg-white/50 p-3 rounded-lg mb-3">
-                            <p className="text-sm"><span className="font-bold text-gray-600">Your Answer:</span> <span className="font-mono">{userAnswer || "—"}</span></p>
-                            <p className="text-sm"><span className="font-bold text-gray-600">Correct Answer:</span> <span className="font-mono text-green-700">{question.correct_answer}</span></p>
+                    {q.type === 'input' ? (
+                        <div className="bg-white/50 p-3 rounded-lg mb-3 border border-gray-200">
+                            <p className="text-sm"><span className="font-bold text-gray-600">Your Answer:</span> <span className="font-mono">{userAns || "—"}</span></p>
+                            <p className="text-sm"><span className="font-bold text-gray-600">Correct Answer:</span> <span className="font-mono text-green-700">{q.correct_answer}</span></p>
                         </div>
                     ) : (
                         <div className="space-y-2 mb-4">
-                        {question.options?.map((opt, i) => {
-                            // Determine highlights
+                        {q.options?.map((opt, idx) => {
                             let style = "bg-white text-gray-600 border-gray-200"
-                            const isUserSelected = Array.isArray(userAnswer) ? userAnswer.includes(i) : userAnswer === i
-                            
-                            // Handling multiple correct answers (array) vs single (number)
-                            const isActuallyCorrect = Array.isArray(question.correct_answer) 
-                                ? (question.correct_answer as number[]).includes(i)
-                                : question.correct_answer === i
+                            const isUserSelected = Array.isArray(userAns) ? userAns.includes(idx) : userAns === idx
+                            const isActuallyCorrect = Array.isArray(q.correct_answer) 
+                                ? (q.correct_answer as number[]).includes(idx)
+                                : q.correct_answer === idx
 
-                            if (isActuallyCorrect) {
-                                style = "bg-green-100 text-green-900 border-green-300 font-bold ring-1 ring-green-400"
-                            } else if (isUserSelected && !isActuallyCorrect) {
-                                style = "bg-red-100 text-red-900 border-red-300 line-through"
-                            } else if (isUserSelected) {
-                                style = "bg-gray-100 border-gray-400" // Fallback
-                            }
+                            if (isActuallyCorrect) style = "bg-green-100 text-green-900 border-green-300 font-bold"
+                            else if (isUserSelected && !isActuallyCorrect) style = "bg-red-100 text-red-900 border-red-300 line-through"
 
                             return (
-                                <div key={i} className={`p-3 rounded-lg border text-sm flex justify-between items-center ${style}`}>
-                                    <span>{String.fromCharCode(65 + i)}. {opt}</span>
+                                <div key={idx} className={`p-3 rounded-lg border text-sm flex justify-between items-center ${style}`}>
+                                    <span>{String.fromCharCode(65 + idx)}. {opt}</span>
                                     {isActuallyCorrect && <Check className="w-4 h-4" />}
-                                    {isUserSelected && !isActuallyCorrect && <span className="text-xs font-bold text-red-600">YOU</span>}
                                 </div>
                             )
                         })}
@@ -617,7 +598,7 @@ export default function Quiz() {
                     
                     <div className="text-sm text-gray-700 bg-white/60 p-3 rounded border border-gray-200/50">
                       <span className="font-bold text-gray-900 block mb-1">Explanation:</span>
-                      {question.explanation}
+                      {q.explanation}
                     </div>
                   </div>
                 </div>
@@ -635,26 +616,13 @@ export default function Quiz() {
     )
   }
 
-  // 5. ACTIVE QUIZ SCREEN
+  // 5. ACTIVE QUIZ
   return (
-    <div className="max-w-3xl mx-auto px-4">
-      {/* Header */}
+    <div className="max-w-3xl mx-auto px-4 pt-6">
       <div className="flex justify-between items-center mb-6">
-        <div>
-          <span className="text-xs font-bold text-gray-500 uppercase tracking-wide">
-            Question {currentQuestionIndex + 1} of {questions.length}
-          </span>
-          <div className="flex items-center space-x-2 mt-1">
-             <span className={`px-2 py-0.5 rounded text-xs font-medium uppercase ${
-              currentQuestion.difficulty === 'easy' ? 'bg-green-100 text-green-800' :
-              currentQuestion.difficulty === 'medium' ? 'bg-yellow-100 text-yellow-800' :
-              'bg-red-100 text-red-800'
-            }`}>
-              {currentQuestion.difficulty}
-            </span>
-          </div>
-        </div>
-
+        <span className="text-xs font-bold text-gray-500 uppercase tracking-wide">
+          Question {currentQuestionIndex + 1} of {questions.length}
+        </span>
         {quizSettings.timeLimit > 0 && (
           <div className={`flex items-center space-x-2 px-4 py-2 rounded-lg border ${
              timeRemaining < 60 ? 'bg-red-50 border-red-200 text-red-600 animate-pulse' : 'bg-white border-gray-200 text-gray-700'
@@ -665,7 +633,6 @@ export default function Quiz() {
         )}
       </div>
 
-      {/* Progress Bar */}
       <div className="w-full bg-gray-200 rounded-full h-2 mb-8">
         <div 
           className="bg-primary-600 h-2 rounded-full transition-all duration-300 ease-out"
@@ -673,7 +640,6 @@ export default function Quiz() {
         />
       </div>
 
-      {/* Question Card */}
       <div className="card p-8 shadow-lg">
         <div className="mb-4">
            <span className="inline-block px-3 py-1 rounded-full text-xs font-bold bg-gray-100 text-gray-600 uppercase tracking-wider">
