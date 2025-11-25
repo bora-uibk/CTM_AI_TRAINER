@@ -4,9 +4,10 @@ import { useAuth } from '../contexts/AuthContext'
 import { Upload, FileText, Download, Trash2, Loader, CircleCheck as CheckCircle, CircleAlert as AlertCircle, Check, Settings } from 'lucide-react'
 import * as pdfjsLib from 'pdfjs-dist'
 
-// --- FIX: Use a specific, stable version for the worker to avoid 404s ---
-// We explicitly use version 3.11.174 which is highly stable and widely available on CDNs
-pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js`
+// --- FIX: Update worker URL for pdfjs-dist v5+ ---
+// Version 5+ uses .mjs (ES Modules) for the worker.
+// We use 'unpkg' to ensure we get the exact matching version and the correct file extension.
+pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`
 
 interface Document {
   id: string
