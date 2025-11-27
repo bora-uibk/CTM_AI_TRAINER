@@ -44,15 +44,12 @@ const formatTime = (seconds: number | undefined | null) => {
 
 const isAnswerCorrect = (userAns: any, correctAns: any, type: string) => {
   if (!userAns && userAns !== 0) return false;
-  
   if (type === 'single_choice') return Number(userAns) === Number(correctAns);
-  
   if (type === 'multi_choice') {
       const u = Array.isArray(userAns) ? userAns.sort().toString() : '';
       const c = Array.isArray(correctAns) ? correctAns.sort().toString() : '';
       return u === c;
   }
-  
   if (type === 'input') {
       return String(userAns).trim().toLowerCase() === String(correctAns).trim().toLowerCase();
   }
@@ -73,12 +70,11 @@ export default function Team() {
   const [roomCode, setRoomCode] = useState('')
   
   const [loading, setLoading] = useState(false)
-  
-  // Answer State
   const [selectedAnswer, setSelectedAnswer] = useState<any>(null)
   const [timeRemaining, setTimeRemaining] = useState(0)
+  const [timerActive, setTimerActive] = useState(false)
   
-  // Documents State
+  // Documents
   const [availableDocuments, setAvailableDocuments] = useState<any[]>([])
   const [selectedDocuments, setSelectedDocuments] = useState<Set<string>>(new Set())
   
@@ -95,10 +91,11 @@ export default function Team() {
 
   useEffect(() => {
     fetchRooms()
-    fetchDocuments() // Load docs on mount
+    fetchDocuments()
+    const saved = localStorage.getItem('selectedDocuments')
+    if (saved) setSelectedDocuments(new Set(JSON.parse(saved)))
     
-    // Backup poller
-    const roomPoller = setInterval(fetchRooms, 5000);
+    const roomPoller = setInterval(fetchRooms, 3000);
     return () => clearInterval(roomPoller);
   }, [])
 
@@ -106,20 +103,22 @@ export default function Team() {
   useEffect(() => {
     if (!currentRoom) return
 
+    // Initial Load
     fetchParticipants()
 
     const channel = supabase
-      .channel(`room-${currentRoom.id}`)
-      // Listen for Participant Changes
+      .channel(`room-logic-${currentRoom.id}`)
+      // 1. Watch Participants (Joins/Leaves/Team Changes)
       .on('postgres_changes', { 
         event: '*', 
         schema: 'public', 
         table: 'room_participants', 
         filter: `room_id=eq.${currentRoom.id}` 
-      }, () => {
-          fetchParticipants();
+      }, (payload) => {
+          // Immediately re-fetch to ensure consistency
+          fetchParticipants()
       })
-      // Listen for Game State
+      // 2. Watch Game State (Questions/Turn/Score)
       .on('postgres_changes', { 
         event: 'UPDATE', 
         schema: 'public', 
@@ -127,10 +126,10 @@ export default function Team() {
         filter: `id=eq.${currentRoom.id}` 
       }, (payload) => {
           const newRoom = payload.new as ExtendedTeamRoom
-          
           setCurrentRoom(prev => {
               if (!prev) return newRoom;
-
+              
+              // Handle Timer Resets
               if (newRoom.room_status === 'in_progress') {
                   if (newRoom.current_turn_team_id !== prev.current_turn_team_id || 
                       newRoom.current_question_index !== prev.current_question_index) {
@@ -139,6 +138,7 @@ export default function Team() {
                   }
               }
 
+              // Merge heavy JSON fields
               return {
                   ...newRoom,
                   team_questions: (newRoom.team_questions && Object.keys(newRoom.team_questions).length > 0) 
@@ -148,19 +148,24 @@ export default function Team() {
               };
           })
       })
+      // 3. Watch Deletion
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'team_rooms', filter: `id=eq.${currentRoom.id}` }, () => {
+           alert('Room closed by host.')
+           leaveRoom(true) // Force leave locally
+      })
       .subscribe()
 
     return () => { supabase.removeChannel(channel) }
   }, [currentRoom?.id])
 
-  // Timer
+  // Timer Logic
   useEffect(() => {
     if (currentRoom?.room_status === 'in_progress') {
         timerRef.current = setInterval(() => {
             setTimeRemaining(prev => {
                 if (prev <= 1) {
-                    if (currentRoom.created_by === user?.id) handleTimeUp();
-                    return 0;
+                   if (currentRoom.created_by === user?.id) handleTimeUp();
+                   return 0;
                 }
                 return prev - 1;
             });
@@ -170,16 +175,6 @@ export default function Team() {
     }
     return () => { if (timerRef.current) clearInterval(timerRef.current); }
   }, [currentRoom?.room_status, currentRoom?.current_turn_team_id, currentRoom?.current_question_index])
-
-  // Host Consensus Check
-  useEffect(() => {
-    if (!currentRoom || !user || currentRoom.room_status !== 'in_progress') return
-    if (currentRoom.created_by === user.id) {
-        if (currentRoom.team_questions && Object.keys(currentRoom.team_questions).length > 0) {
-            checkTeamConsensus()
-        }
-    }
-  }, [currentRoom?.current_answers]) 
 
 
   // --- DATA HELPERS ---
@@ -200,23 +195,19 @@ export default function Team() {
       .select('*')
       .eq('room_id', currentRoom.id)
     
-    if (!error) setParticipants(data || [])
+    if (!error && data) {
+        setParticipants(data)
+    }
   }
 
   const fetchDocuments = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('documents')
-        .select('id, name, content')
-        .order('created_at', { ascending: false })
-
-      if (!error) {
-        const validDocs = (data || []).filter(doc => 
-          doc.content && doc.content.length > 50
-        )
-        setAvailableDocuments(validDocs)
-      }
-    } catch (error) { console.error(error) }
+    const { data } = await supabase
+      .from('documents')
+      .select('id, name, content')
+      .order('created_at', { ascending: false })
+    
+    const valid = (data || []).filter(d => d.content && d.content.length > 50)
+    setAvailableDocuments(valid)
   }
 
   const toggleDocumentSelection = (docId: string) => {
@@ -226,14 +217,12 @@ export default function Team() {
     setSelectedDocuments(newSelected)
   }
 
-
   // --- ROOM ACTIONS ---
 
   const createRoom = async () => {
     if (!roomName.trim() || !user) return
-    
     if (selectedDocuments.size === 0) {
-        alert("Please select at least one document (e.g. Rulebook).")
+        alert("Please select at least one document.")
         return
     }
 
@@ -261,7 +250,7 @@ export default function Team() {
 
       if (error) throw error
 
-      // Host joins as spectator
+      // Host joins as spectator (team_number: null)
       await supabase.from('room_participants').insert({
           room_id: data.id,
           user_id: user.id,
@@ -272,7 +261,8 @@ export default function Team() {
       setCurrentRoom(data as ExtendedTeamRoom)
       setShowCreateRoom(false)
       setRoomName('')
-      fetchParticipants()
+      // Important: fetch participants immediately to populate state
+      await fetchParticipants()
     } catch (error) {
       console.error('Error creating room:', error)
     } finally {
@@ -284,6 +274,7 @@ export default function Team() {
     if (!roomCode.trim() || !user) return
     setLoading(true)
     try {
+      // 1. Find Room
       const { data: room, error: roomError } = await supabase
         .from('team_rooms')
         .select('*')
@@ -293,6 +284,7 @@ export default function Team() {
 
       if (roomError) throw new Error('Room not found')
 
+      // 2. Check existing
       const { data: existing } = await supabase
         .from('room_participants')
         .select('*')
@@ -300,24 +292,56 @@ export default function Team() {
         .eq('user_id', user.id)
         .maybeSingle()
 
+      // 3. Insert if new
       if (!existing) {
-        await supabase.from('room_participants').insert({
+        const { error: joinError } = await supabase.from('room_participants').insert({
             room_id: room.id,
             user_id: user.id,
             user_email: user.email || '',
-            team_number: null 
+            team_number: null // Join as spectator
         })
+        if (joinError) throw joinError
       }
 
+      // 4. Set State safely
+      // Fetch participants BEFORE setting room to prevent empty UI state
+      const { data: parts } = await supabase
+        .from('room_participants')
+        .select('*')
+        .eq('room_id', room.id)
+        
+      setParticipants(parts || [])
       setCurrentRoom(room as ExtendedTeamRoom)
       setShowJoinRoom(false)
       setRoomCode('')
-      fetchParticipants()
+
     } catch (error: any) {
       alert(error.message)
     } finally {
       setLoading(false)
     }
+  }
+
+  const leaveRoom = async (force = false) => {
+    if (!currentRoom) return
+    
+    // If forced (e.g., room deleted), just clear state
+    if (force) {
+        setCurrentRoom(null)
+        setParticipants([])
+        return
+    }
+
+    if (user) {
+        await supabase.from('room_participants')
+            .delete()
+            .eq('room_id', currentRoom.id)
+            .eq('user_id', user.id)
+    }
+    setCurrentRoom(null)
+    setParticipants([])
+    setSelectedAnswer(null)
+    setTimerActive(false)
   }
 
   const deleteRoom = async (roomId: string) => {
@@ -326,27 +350,13 @@ export default function Team() {
     setLoading(true)
     try {
       await supabase.from('team_rooms').delete().eq('id', roomId).eq('created_by', user.id)
+      if (currentRoom?.id === roomId) leaveRoom(true)
       setRooms(prev => prev.filter(r => r.id !== roomId))
-      if (currentRoom?.id === roomId) {
-        setCurrentRoom(null)
-        setParticipants([])
-      }
     } catch (error) { console.error(error) } 
     finally { setLoading(false) }
   }
 
-  const leaveRoom = async () => {
-    if (!currentRoom || !user) return
-    try {
-      await supabase.from('room_participants').delete().eq('room_id', currentRoom.id).eq('user_id', user.id)
-      setCurrentRoom(null)
-      setParticipants([])
-      setSelectedAnswer(null)
-      setTimerActive(false)
-    } catch (error) { console.error(error) }
-  }
-
-  // --- LOBBY LOGIC (FIXED TEAM JOINING) ---
+  // --- LOBBY ACTIONS (Fixing Team Selection) ---
 
   const handleJoinTeam = async (teamNum: number) => {
       if (!currentRoom || !user) return
@@ -357,20 +367,21 @@ export default function Team() {
             .update({ team_number: teamNum })
             .eq('room_id', currentRoom.id)
             .eq('user_id', user.id)
+            .select() // Ensure we wait for the commit
           
           if (error) throw error
 
-          // 2. Immediate State Update (don't wait for realtime)
+          // 2. Manual Fetch to Ensure UI Sync
+          await fetchParticipants()
+
+          // 3. Optimistic Update (fallback)
           setParticipants(prev => 
               prev.map(p => p.user_id === user.id ? { ...p, team_number: teamNum } : p)
           )
-          
-          // 3. Force Fetch to verify
-          await fetchParticipants()
 
       } catch (error: any) {
           console.error("Error joining team:", error)
-          alert("Failed to join team. Please try again.")
+          alert("Failed to join team.")
       }
   }
 
@@ -379,12 +390,11 @@ export default function Team() {
   const startGame = async () => {
     if (!currentRoom || currentRoom.created_by !== user?.id) return
     
-    // Validation
+    // Validate Teams
     const t1Count = participants.filter(p => p.team_number === 1).length
     const t2Count = participants.filter(p => p.team_number === 2).length
-    
     if (t1Count === 0 || t2Count === 0) {
-        alert("Waiting for players... Both teams need at least 1 member.")
+        alert("Both teams need at least 1 player to start.")
         return
     }
 
@@ -392,16 +402,16 @@ export default function Team() {
     try {
       const totalQuestions = 2 * currentRoom.questions_per_team
       
-      // Send selected documents from Host's state
+      // Call AI
       const { data, error } = await supabase.functions.invoke('generate-quiz', {
         body: { 
           count: totalQuestions,
-          selectedDocuments: Array.from(selectedDocuments) 
+          selectedDocuments: Array.from(selectedDocuments)
         }
       })
 
       if (error) throw error
-      if (!data.questions || data.questions.length === 0) throw new Error("AI failed to generate questions.")
+      if (!data.questions || data.questions.length === 0) throw new Error("AI failed.")
 
       const teamQuestions: Record<string, QuizQuestion[]> = {}
       teamQuestions["1"] = data.questions.slice(0, currentRoom.questions_per_team)
@@ -409,6 +419,7 @@ export default function Team() {
       
       const firstQ = { ...teamQuestions["1"][0], owner_team_id: 1 }
 
+      // Update Room to In Progress
       await supabase.from('team_rooms').update({
           room_status: 'in_progress',
           team_questions: teamQuestions,
@@ -429,12 +440,12 @@ export default function Team() {
 
   const submitAnswer = async () => {
     if (!currentRoom || !user || selectedAnswer === null) return
-    
+    if (typeof selectedAnswer === 'string' && !selectedAnswer.trim()) return
+
     const participant = participants.find(p => p.user_id === user.id)
-    if (!participant || !participant.team_number) return // Safety check
+    if (!participant || !participant.team_number) return
 
     const currentAnswers = currentRoom.current_answers || {}
-    
     currentAnswers[user.id] = {
       answer: selectedAnswer,
       user_email: user.email,
@@ -443,6 +454,14 @@ export default function Team() {
 
     await supabase.from('team_rooms').update({ current_answers: currentAnswers }).eq('id', currentRoom.id)
   }
+
+  // Host Check
+  useEffect(() => {
+    if (!currentRoom || !user || currentRoom.room_status !== 'in_progress') return
+    if (currentRoom.created_by === user.id) {
+        checkTeamConsensus()
+    }
+  }, [currentRoom?.current_answers]) 
 
   const checkTeamConsensus = async () => {
     if (!currentRoom) return
@@ -454,7 +473,6 @@ export default function Team() {
         .map(m => answersMap[m.user_id])
         .filter(a => a !== undefined)
 
-    // Check if everyone on the active team has submitted
     if (submissions.length === teamMembers.length && submissions.length > 0) {
         const firstAns = submissions[0].answer
         const allSame = submissions.every(sub => JSON.stringify(sub.answer) === JSON.stringify(firstAns))
@@ -467,13 +485,11 @@ export default function Team() {
 
   const advanceToNextQuestion = async (teamAnswer: any) => {
     if (!currentRoom || !currentRoom.team_questions) return
-
     const currentQ = currentRoom.current_question
     if (!currentQ) return
 
     const currentTeam = currentRoom.current_turn_team_id
     const isCorrect = teamAnswer === 'PASS' ? false : isAnswerCorrect(teamAnswer, currentQ.correct_answer, currentQ.type)
-    
     const originalOwner = currentQ.owner_team_id || currentTeam
     const isStealAttempt = currentTeam !== originalOwner
     
@@ -486,24 +502,17 @@ export default function Team() {
         teamScores[currentTeam.toString()] = (teamScores[currentTeam.toString()] || 0) + 1
         
         if (!isStealAttempt) {
-             // Normal correct -> Switch turn
              nextTeam = (currentTeam % 2) + 1
-             // If Team 2 finished, increment round index
              if (currentTeam === 2) nextIndex++
         }
         
-        // Load next question based on who is playing next
         const list = currentRoom.team_questions[nextTeam.toString()] || []
         nextQuestion = list[nextIndex] ? { ...list[nextIndex], owner_team_id: nextTeam } : null
-
     } else {
-        // Wrong
         if (!isStealAttempt) {
-            // Failed own -> Give opponent chance to steal SAME question
             nextTeam = (currentTeam % 2) + 1
             nextQuestion = currentQ 
         } else {
-            // Failed steal -> Back to owner (currentTeam)
             nextTeam = currentTeam
             const list = currentRoom.team_questions[nextTeam.toString()] || []
             nextQuestion = list[nextIndex] ? { ...list[nextIndex], owner_team_id: nextTeam } : null
@@ -538,7 +547,7 @@ export default function Team() {
     }
   }
 
-  // --- UI COMPONENTS ---
+  // --- Render UI Helpers ---
 
   const handleMultiChoiceSelect = (idx: number) => {
       const current = (selectedAnswer as number[]) || []
@@ -607,39 +616,50 @@ export default function Team() {
     }
   }
 
-  // ==================== MAIN RENDER ====================
+
+  // ==================== RENDER VIEWS ====================
 
   // 1. FINISHED
   if (currentRoom?.room_status === 'finished') {
       const sorted = Object.entries(currentRoom.team_scores).sort(([,a],[,b])=>b-a)
       const feedback = currentRoom.feedback
+
       return (
         <div className="max-w-4xl mx-auto space-y-6 px-4">
             <div className="text-center"><h1 className="text-2xl font-bold text-gray-900 mb-2">Game Finished!</h1><p className="text-gray-600">{currentRoom.name}</p></div>
             <div className="card">
-              <h2 className="text-xl font-semibold text-gray-900 mb-6 text-center">Results</h2>
+              <h2 className="text-xl font-semibold text-gray-900 mb-6 text-center">Final Results</h2>
               <div className="space-y-4">
-                {sorted.map(([teamId, score], index) => (
-                    <div key={teamId} className={`p-4 rounded-lg border-2 ${index===0?'border-yellow-400 bg-yellow-50':'border-gray-200 bg-gray-50'}`}>
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center space-x-2">{index===0 && <Crown className="w-5 h-5 text-yellow-500" />}<h3 className="font-semibold text-gray-900">Team {teamId}</h3></div>
-                        <div className="text-2xl font-bold text-primary-600">{score} pts</div>
+                {sorted.map(([teamId, score], index) => {
+                    const members = participants.filter(p => p.team_number === parseInt(teamId))
+                    return (
+                      <div key={teamId} className={`p-4 rounded-lg border-2 ${index===0?'border-yellow-400 bg-yellow-50':'border-gray-200 bg-gray-50'}`}>
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center space-x-2">{index===0 && <Crown className="w-5 h-5 text-yellow-500" />}<h3 className="font-semibold text-gray-900">Team {teamId}</h3></div>
+                          <div className="text-2xl font-bold text-primary-600">{score} pts</div>
+                        </div>
+                        <div className="text-sm text-gray-600">Members: {members.map(m => m.user_email).join(', ')}</div>
                       </div>
-                    </div>
-                ))}
+                    )
+                })}
               </div>
             </div>
-            {/* Feedback UI */}
+            
             <div className="card border-blue-200 bg-blue-50">
-                <div className="flex items-center space-x-2 mb-4"><Sparkles className="w-5 h-5 text-blue-600" /><h3 className="text-lg font-semibold text-blue-900">AI Analysis</h3></div>
+                <div className="flex items-center space-x-2 mb-4">
+                    <Sparkles className="w-5 h-5 text-blue-600" />
+                    <h3 className="text-lg font-semibold text-blue-900">AI Analysis</h3>
+                </div>
                 {feedback ? (
                     <div className="space-y-4">
                         {feedback.summary && <p className="text-gray-700">{feedback.summary}</p>}
-                        {/* Render detailed feedback here */}
+                        {feedback.strengths && <div className="bg-green-50 p-3 rounded"><h4 className="text-green-900 font-bold">Strengths</h4><ul className="text-sm text-green-800 list-disc list-inside">{feedback.strengths.map((s,i)=><li key={i}>{s}</li>)}</ul></div>}
                     </div>
-                ) : <p className="text-blue-800 text-center">Generating...</p>}
+                ) : (
+                    <div className="text-center py-4"><Loader className="animate-spin inline mr-2"/> Generating...</div>
+                )}
             </div>
-            <div className="mt-8 text-center"><button onClick={leaveRoom} className="btn-primary">Leave Room</button></div>
+            <div className="text-center"><button onClick={() => leaveRoom(true)} className="btn-primary">Leave Room</button></div>
         </div>
       )
   }
@@ -674,8 +694,13 @@ export default function Team() {
                   </div>
               </div>
               <div className="space-y-4">
-                   <div className="card"><h3 className="font-bold mb-4">Scoreboard</h3>{/* Scores */}</div>
-                   <div className="card"><h3 className="font-bold mb-4">Consensus</h3>{/* Participants */}</div>
+                   <div className="card"><h3 className="font-bold mb-4">Scoreboard</h3>
+                      {[1,2].map(t => (
+                          <div key={t} className={`flex justify-between p-3 mb-2 rounded ${currentRoom.current_turn_team_id===t?'bg-blue-50 border border-blue-200':'bg-gray-50'}`}>
+                              <span>Team {t}</span><span className="font-bold text-primary-600">{currentRoom.team_scores[t]}</span>
+                          </div>
+                      ))}
+                   </div>
               </div>
           </div>
       )
@@ -683,12 +708,11 @@ export default function Team() {
 
   // 3. LOBBY
   if (currentRoom && currentRoom.room_status === 'lobby') {
-      // Derived logic to split participants
       const myTeam = participants.find(p => p.user_id === user?.id)?.team_number
-      const team1Players = participants.filter(p => p.team_number === 1)
-      const team2Players = participants.filter(p => p.team_number === 2)
       const spectators = participants.filter(p => p.team_number === null || p.team_number === undefined)
-      
+      const team1 = participants.filter(p => p.team_number === 1)
+      const team2 = participants.filter(p => p.team_number === 2)
+
       return (
           <div className="max-w-4xl mx-auto px-4">
               <div className="text-center mb-8">
@@ -697,65 +721,45 @@ export default function Team() {
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
-                  {/* TEAM 1 */}
-                  <div className={`card border-t-4 border-t-blue-500 ${myTeam===1 ? 'ring-2 ring-blue-500' : ''}`}>
-                      <div className="text-center mb-6">
-                          <h3 className="text-xl font-bold text-gray-900">Team 1</h3>
-                          <p className="text-sm text-gray-500">{team1Players.length} Players</p>
-                      </div>
-                      <div className="space-y-2 mb-6 min-h-[100px]">
-                          {team1Players.map(p => (
-                              <div key={p.id} className="flex items-center gap-2 p-2 bg-blue-50 rounded">
-                                  <div className="w-6 h-6 bg-blue-200 rounded-full flex items-center justify-center text-xs text-blue-700 font-bold">{p.user_email?.charAt(0)}</div>
-                                  <span className="text-sm">{p.user_email}</span>
-                              </div>
-                          ))}
+                  <div className={`card border-t-4 border-t-blue-500 ${myTeam===1?'ring-2 ring-blue-500':''}`}>
+                      <h3 className="text-center text-xl font-bold mb-4">Team 1</h3>
+                      <div className="space-y-2 mb-4 min-h-[100px]">
+                          {team1.map(p => <div key={p.id} className="p-2 bg-blue-50 rounded text-sm font-medium">{p.user_email}</div>)}
                       </div>
                       <button onClick={() => handleJoinTeam(1)} disabled={myTeam === 1} className="btn-primary w-full bg-blue-600 hover:bg-blue-700">Join Team 1</button>
                   </div>
 
-                  {/* TEAM 2 */}
-                  <div className={`card border-t-4 border-t-purple-500 ${myTeam===2 ? 'ring-2 ring-purple-500' : ''}`}>
-                      <div className="text-center mb-6">
-                          <h3 className="text-xl font-bold text-gray-900">Team 2</h3>
-                          <p className="text-sm text-gray-500">{team2Players.length} Players</p>
-                      </div>
-                      <div className="space-y-2 mb-6 min-h-[100px]">
-                          {team2Players.map(p => (
-                              <div key={p.id} className="flex items-center gap-2 p-2 bg-purple-50 rounded">
-                                  <div className="w-6 h-6 bg-purple-200 rounded-full flex items-center justify-center text-xs text-purple-700 font-bold">{p.user_email?.charAt(0)}</div>
-                                  <span className="text-sm">{p.user_email}</span>
-                              </div>
-                          ))}
+                  <div className={`card border-t-4 border-t-purple-500 ${myTeam===2?'ring-2 ring-purple-500':''}`}>
+                      <h3 className="text-center text-xl font-bold mb-4">Team 2</h3>
+                      <div className="space-y-2 mb-4 min-h-[100px]">
+                          {team2.map(p => <div key={p.id} className="p-2 bg-purple-50 rounded text-sm font-medium">{p.user_email}</div>)}
                       </div>
                       <button onClick={() => handleJoinTeam(2)} disabled={myTeam === 2} className="btn-primary w-full bg-purple-600 hover:bg-purple-700">Join Team 2</button>
                   </div>
               </div>
 
-              {/* Waiting List */}
               {spectators.length > 0 && (
-                  <div className="bg-gray-50 rounded-xl p-4 text-center mb-8">
-                      <h4 className="text-xs font-bold text-gray-500 uppercase mb-3">Undecided Players</h4>
+                  <div className="bg-gray-50 p-4 rounded-lg text-center mb-6">
+                      <h4 className="text-xs font-bold text-gray-500 uppercase mb-2">Unassigned Players</h4>
                       <div className="flex flex-wrap justify-center gap-2">
-                          {spectators.map(p => (
-                              <span key={p.id} className="px-3 py-1 bg-white border rounded-full text-sm text-gray-600">{p.user_email}</span>
-                          ))}
+                          {spectators.map(p => <span key={p.id} className="px-3 py-1 bg-white border rounded-full text-sm text-gray-600">{p.user_email}</span>)}
                       </div>
                   </div>
               )}
 
               {currentRoom.created_by === user?.id && (
                   <div className="text-center">
-                      <button onClick={startGame} disabled={loading || team1Players.length === 0 || team2Players.length === 0} className="btn-primary px-12 py-4 text-lg shadow-lg">
+                      <button onClick={startGame} disabled={loading || team1.length === 0 || team2.length === 0} className="btn-primary px-12 py-4 text-lg shadow-lg">
                           {loading ? <Loader className="animate-spin"/> : "Start Game"}
                       </button>
                   </div>
               )}
+              <div className="text-center mt-4"><button onClick={() => leaveRoom()} className="text-gray-500 hover:underline">Leave Lobby</button></div>
           </div>
       )
   }
 
-  // 4. MAIN DASHBOARD (Create Room with Docs)
+  // 4. MAIN MENU
   return (
     <div className="max-w-2xl mx-auto px-4">
        <h1 className="text-3xl font-bold text-center mb-8">Team Challenge</h1>
@@ -769,7 +773,7 @@ export default function Team() {
                    <div className="space-y-4 animate-in fade-in">
                        <input className="input-field" placeholder="Room Name" value={roomName} onChange={e=>setRoomName(e.target.value)} />
                        
-                       {/* Document Selection Added Here */}
+                       {/* Added Document Selection */}
                        <div>
                            <label className="text-xs font-bold text-gray-500 uppercase mb-2 block">Knowledge Base</label>
                            <div className="border rounded-lg max-h-32 overflow-y-auto">
@@ -783,14 +787,8 @@ export default function Team() {
                        </div>
 
                        <div className="grid grid-cols-2 gap-4">
-                           <div>
-                               <label className="text-xs font-bold text-gray-500 uppercase">Questions/Team</label>
-                               <input type="number" className="input-field" value={roomSettings.questionsPerTeam} onChange={e=>setRoomSettings(s=>({...s, questionsPerTeam: parseInt(e.target.value)}))} min="1"/>
-                           </div>
-                           <div>
-                               <label className="text-xs font-bold text-gray-500 uppercase">Time (sec)</label>
-                               <input type="number" className="input-field" value={roomSettings.timePerQuestion} onChange={e=>setRoomSettings(s=>({...s, timePerQuestion: parseInt(e.target.value)}))} min="10"/>
-                           </div>
+                           <div><label className="text-xs font-bold text-gray-500 block mb-1">Questions/Team</label><input type="number" className="input-field" value={roomSettings.questionsPerTeam} onChange={e=>setRoomSettings(s=>({...s, questionsPerTeam: parseInt(e.target.value)}))} min="1"/></div>
+                           <div><label className="text-xs font-bold text-gray-500 block mb-1">Time (s)</label><input type="number" className="input-field" value={roomSettings.timePerQuestion} onChange={e=>setRoomSettings(s=>({...s, timePerQuestion: parseInt(e.target.value)}))} min="10"/></div>
                        </div>
                        <div className="flex gap-3">
                            <button onClick={createRoom} disabled={loading} className="btn-primary flex-1">Create</button>
@@ -799,7 +797,7 @@ export default function Team() {
                    </div>
                ) : <button onClick={()=>setShowCreateRoom(true)} className="btn-primary w-full">Create Room</button>}
            </div>
-
+           
            <div className="card p-6">
                <div className="flex items-center gap-3 mb-4">
                    <div className="p-2 bg-green-100 rounded-lg"><LogIn className="w-6 h-6 text-green-600"/></div>
@@ -807,7 +805,7 @@ export default function Team() {
                </div>
                {showJoinRoom ? (
                    <div className="space-y-4 animate-in fade-in">
-                       <input className="input-field text-center font-mono text-2xl tracking-widest uppercase" placeholder="CODE" maxLength={6} value={roomCode} onChange={e=>setRoomCode(e.target.value)} />
+                       <input className="input-field text-center font-mono text-2xl uppercase" placeholder="CODE" maxLength={6} value={roomCode} onChange={e=>setRoomCode(e.target.value)} />
                        <div className="flex gap-3">
                            <button onClick={joinRoom} disabled={loading} className="btn-primary flex-1 bg-green-600 hover:bg-green-700">Join Lobby</button>
                            <button onClick={()=>setShowJoinRoom(false)} className="btn-secondary">Cancel</button>
@@ -817,7 +815,6 @@ export default function Team() {
            </div>
        </div>
        
-       {/* Active Rooms List */}
        {rooms.length > 0 && (
           <div className="mt-8">
               <h2 className="text-lg font-bold text-gray-900 mb-4 flex items-center"><Trophy className="w-5 h-5 mr-2 text-yellow-500"/> Active Rooms</h2>
