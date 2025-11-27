@@ -33,6 +33,32 @@ interface ExtendedTeamRoom extends TeamRoom {
   } | null;
 }
 
+// --- HELPERS (Defined Top-Level) ---
+
+const formatTime = (seconds: number) => {
+  if (seconds === undefined || seconds === null) return "0:00";
+  const mins = Math.floor(seconds / 60)
+  const secs = seconds % 60
+  return `${mins}:${secs.toString().padStart(2, '0')}`
+}
+
+const isAnswerCorrect = (userAns: any, correctAns: any, type: string) => {
+  if (!userAns && userAns !== 0) return false;
+  
+  if (type === 'single_choice') return Number(userAns) === Number(correctAns);
+  
+  if (type === 'multi_choice') {
+      const u = Array.isArray(userAns) ? userAns.sort().toString() : '';
+      const c = Array.isArray(correctAns) ? correctAns.sort().toString() : '';
+      return u === c;
+  }
+  
+  if (type === 'input') {
+      return String(userAns).trim().toLowerCase() === String(correctAns).trim().toLowerCase();
+  }
+  return false;
+}
+
 export default function Team() {
   const { user } = useAuth()
   
@@ -48,7 +74,7 @@ export default function Team() {
   
   const [loading, setLoading] = useState(false)
   
-  // Answer State (Flexible type)
+  // Answer State
   const [selectedAnswer, setSelectedAnswer] = useState<any>(null)
   
   const [timeRemaining, setTimeRemaining] = useState(0)
@@ -61,32 +87,6 @@ export default function Team() {
     questionsPerTeam: 10,
     timePerQuestion: 60
   })
-
-  // --- HELPERS (Defined Top-Level to fix ReferenceError) ---
-
-  const formatTime = (seconds: number) => {
-    if (seconds === undefined || seconds === null) return "0:00";
-    const mins = Math.floor(seconds / 60)
-    const secs = seconds % 60
-    return `${mins}:${secs.toString().padStart(2, '0')}`
-  }
-
-  const isAnswerCorrect = (userAns: any, correctAns: any, type: string) => {
-    if (!userAns && userAns !== 0) return false;
-    
-    if (type === 'single_choice') return Number(userAns) === Number(correctAns);
-    
-    if (type === 'multi_choice') {
-        const u = Array.isArray(userAns) ? userAns.sort().toString() : '';
-        const c = Array.isArray(correctAns) ? correctAns.sort().toString() : '';
-        return u === c;
-    }
-    
-    if (type === 'input') {
-        return String(userAns).trim().toLowerCase() === String(correctAns).trim().toLowerCase();
-    }
-    return false;
-  }
 
   // --- EFFECTS ---
 
@@ -104,7 +104,7 @@ export default function Team() {
     }
   }, [currentRoom?.id])
 
-  // Game Engine (Host Consensus Check)
+  // Game Engine
   useEffect(() => {
     if (!currentRoom || !user || currentRoom.room_status !== 'in_progress') return
     if (currentRoom.created_by === user.id) {
@@ -162,14 +162,12 @@ export default function Team() {
             setCurrentRoom(prevRoom => {
                 if (!prevRoom) return updatedRoom;
                 
-                // Merge big JSON objects if missing in payload
                 const mergedRoom = { 
                     ...updatedRoom, 
                     team_questions: (updatedRoom.team_questions && Object.keys(updatedRoom.team_questions).length > 0) ? updatedRoom.team_questions : prevRoom.team_questions,
                     feedback: updatedRoom.feedback || prevRoom.feedback
                 };
 
-                // State change detection
                 const prevQ = prevRoom.current_question;
                 const nextQ = mergedRoom.current_question;
                 
@@ -177,7 +175,6 @@ export default function Team() {
                      setSelectedAnswer(null)
                 }
                 
-                // Timer Logic
                 if (mergedRoom.room_status === 'in_progress') {
                    if (mergedRoom.current_turn_team_id !== prevRoom.current_turn_team_id || 
                        mergedRoom.current_question_index !== prevRoom.current_question_index) {
@@ -397,7 +394,6 @@ export default function Team() {
 
     if (submissions.length === teamMembers.length && submissions.length > 0) {
         const firstAns = submissions[0].answer
-        // Deep equality check for consensus
         const allSame = submissions.every(sub => JSON.stringify(sub.answer) === JSON.stringify(firstAns))
 
         if (allSame) {
@@ -430,15 +426,14 @@ export default function Team() {
              if (currentTeam === 2) nextIndex++
         }
         
-        // Load new question
         const list = currentRoom.team_questions[nextTeam.toString()] || []
         nextQuestion = list[nextIndex] ? { ...list[nextIndex], owner_team_id: nextTeam } : null
     } else {
         if (!isStealAttempt) {
             nextTeam = (currentTeam % 2) + 1
-            nextQuestion = currentQ // Steal chance
+            nextQuestion = currentQ 
         } else {
-            nextTeam = currentTeam // Back to owner
+            nextTeam = currentTeam 
             const list = currentRoom.team_questions[nextTeam.toString()] || []
             nextQuestion = list[nextIndex] ? { ...list[nextIndex], owner_team_id: nextTeam } : null
         }
@@ -757,6 +752,44 @@ export default function Team() {
                    </div>
                ) : <button onClick={()=>setShowJoinRoom(true)} className="btn-secondary w-full">Enter Code</button>}
            </div>
+
+           {/* Active Rooms List (Restored) */}
+           {rooms.length > 0 && (
+              <div className="card p-6">
+                  <h2 className="text-lg font-bold mb-4 text-gray-900 flex items-center">
+                    <Trophy className="w-5 h-5 mr-2 text-yellow-600" /> 
+                    Active Rooms
+                  </h2>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      {rooms.map(room => (
+                          <div key={room.id} className="p-4 border border-gray-200 rounded-xl relative hover:bg-gray-50 transition-colors group">
+                              <h3 className="font-bold text-gray-800 truncate pr-6 mb-1">{room.name}</h3>
+                              <div className="flex items-center text-xs text-gray-500 mb-3 space-x-3">
+                                 <span className="flex items-center"><Users className="w-3 h-3 mr-1"/> {room.num_teams} Teams</span>
+                                 <span className="flex items-center"><Clock className="w-3 h-3 mr-1"/> {room.time_per_question}s</span>
+                              </div>
+                              
+                              <button 
+                                onClick={() => { setRoomCode(room.code); setShowJoinRoom(true); }} 
+                                className="btn-secondary w-full py-2 text-sm"
+                              >
+                                Join
+                              </button>
+
+                              {user?.id === room.created_by && (
+                                <button 
+                                  onClick={(e) => { e.stopPropagation(); deleteRoom(room.id); }} 
+                                  className="absolute top-3 right-3 p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                                  title="Delete Room"
+                                >
+                                  <Trash2 className="w-4 h-4"/>
+                                </button>
+                              )}
+                          </div>
+                      ))}
+                  </div>
+              </div>
+           )}
        </div>
     </div>
   )
