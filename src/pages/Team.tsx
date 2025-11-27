@@ -433,29 +433,39 @@ export default function Team() {
 
         const originalOwner = currentQ.owner_team_id || currentTeam
         const isStealAttempt = currentTeam !== originalOwner
-
+        
         let nextTeam = currentTeam
         let nextIndex = currentRoom.current_question_index
         let nextQuestion = null
         const teamScores = { ...currentRoom.team_scores }
-
+        
         if (isCorrect) {
-            teamScores[currentTeam.toString()] = (teamScores[currentTeam.toString()] || 0) + 1
+            // Award point
+            teamScores[currentTeam] = (teamScores[currentTeam] || 0) + 1
+        
             if (isStealAttempt) {
-                 nextTeam = currentTeam // Keep turn
+                // Correct steal → keep turn, move to next question
+                nextTeam = currentTeam
+                nextIndex++
             } else {
-                 nextTeam = (currentTeam % 2) + 1
-                 if (currentTeam === 2) nextIndex++
-            }
-            nextQuestion = getQuestionFromDeck(currentRoom.team_questions, nextTeam, nextIndex)
-        } else {
-            if (!isStealAttempt) {
-                // Failed own question -> Pass to opponent (Steal Opp)
+                // Correct own → switch team, advance when team 2 finishes
                 nextTeam = (currentTeam % 2) + 1
-                nextQuestion = currentQ // Keep SAME question
+                if (currentTeam === 2) nextIndex++
+            }
+        
+            nextQuestion = getQuestionFromDeck(currentRoom.team_questions, nextTeam, nextIndex)
+        
+        } else {
+            // ❌ Wrong Answer
+            if (!isStealAttempt) {
+                // Wrong by owner → allow ONE steal attempt
+                nextTeam = (currentTeam % 2) + 1
+                nextQuestion = currentQ  // SAME question; steal round begins
             } else {
-                // Failed stolen question -> Return to owner, move on
-                nextTeam = currentTeam 
+                // Wrong by stealing team → steal attempt OVER
+                // return control to owner and move forward
+                nextTeam = originalOwner
+                nextIndex++
                 nextQuestion = getQuestionFromDeck(currentRoom.team_questions, nextTeam, nextIndex)
             }
         }
