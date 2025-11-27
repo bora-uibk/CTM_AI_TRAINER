@@ -33,33 +33,10 @@ interface ExtendedTeamRoom extends TeamRoom {
   } | null;
 }
 
-// --- Helpers (Defined outside to prevent ReferenceErrors) ---
-
-const formatTime = (seconds: number) => {
-  if (!seconds && seconds !== 0) return "0:00";
-  const mins = Math.floor(seconds / 60)
-  const secs = seconds % 60
-  return `${mins}:${secs.toString().padStart(2, '0')}`
-}
-
-const isAnswerCorrect = (userAns: any, correctAns: any, type: string) => {
-  if (type === 'single_choice') return Number(userAns) === Number(correctAns);
-  if (type === 'multi_choice') {
-      // Sort both arrays and stringify to compare
-      const u = Array.isArray(userAns) ? userAns.sort().toString() : '';
-      const c = Array.isArray(correctAns) ? correctAns.sort().toString() : '';
-      return u === c;
-  }
-  if (type === 'input') {
-      return String(userAns).trim().toLowerCase() === String(correctAns).trim().toLowerCase();
-  }
-  return false;
-}
-
 export default function Team() {
   const { user } = useAuth()
   
-  // State
+  // --- STATE ---
   const [rooms, setRooms] = useState<ExtendedTeamRoom[]>([])
   const [currentRoom, setCurrentRoom] = useState<ExtendedTeamRoom | null>(null)
   const [participants, setParticipants] = useState<RoomParticipant[]>([])
@@ -85,7 +62,33 @@ export default function Team() {
     timePerQuestion: 60
   })
 
-  // --- Effects ---
+  // --- HELPERS (Defined Top-Level to fix ReferenceError) ---
+
+  const formatTime = (seconds: number) => {
+    if (seconds === undefined || seconds === null) return "0:00";
+    const mins = Math.floor(seconds / 60)
+    const secs = seconds % 60
+    return `${mins}:${secs.toString().padStart(2, '0')}`
+  }
+
+  const isAnswerCorrect = (userAns: any, correctAns: any, type: string) => {
+    if (!userAns && userAns !== 0) return false;
+    
+    if (type === 'single_choice') return Number(userAns) === Number(correctAns);
+    
+    if (type === 'multi_choice') {
+        const u = Array.isArray(userAns) ? userAns.sort().toString() : '';
+        const c = Array.isArray(correctAns) ? correctAns.sort().toString() : '';
+        return u === c;
+    }
+    
+    if (type === 'input') {
+        return String(userAns).trim().toLowerCase() === String(correctAns).trim().toLowerCase();
+    }
+    return false;
+  }
+
+  // --- EFFECTS ---
 
   useEffect(() => {
     fetchRooms()
@@ -128,7 +131,7 @@ export default function Team() {
     return () => clearInterval(interval)
   }, [timerActive, timeRemaining])
 
-  // --- Data Fetching ---
+  // --- DATA FETCHING ---
 
   const fetchRooms = async () => {
     const { data } = await supabase
@@ -203,7 +206,7 @@ export default function Team() {
     return () => { channel.unsubscribe() }
   }
 
-  // --- Actions ---
+  // --- ACTIONS ---
 
   const createRoom = async () => {
     if (!roomName.trim() || !user) return
@@ -316,7 +319,7 @@ export default function Team() {
     } catch (error) { console.error(error) }
   }
 
-  // --- Lobby Logic ---
+  // --- LOBBY LOGIC ---
   const handleJoinTeam = async (teamNum: number) => {
       if (!currentRoom || !user) return
       try {
@@ -330,7 +333,7 @@ export default function Team() {
       } catch (error) { console.error(error) }
   }
 
-  // --- Game Logic ---
+  // --- GAME LOGIC ---
 
   const startGame = async () => {
     if (!currentRoom || currentRoom.created_by !== user?.id) return
@@ -394,6 +397,7 @@ export default function Team() {
 
     if (submissions.length === teamMembers.length && submissions.length > 0) {
         const firstAns = submissions[0].answer
+        // Deep equality check for consensus
         const allSame = submissions.every(sub => JSON.stringify(sub.answer) === JSON.stringify(firstAns))
 
         if (allSame) {
@@ -425,7 +429,8 @@ export default function Team() {
              nextTeam = (currentTeam % 2) + 1
              if (currentTeam === 2) nextIndex++
         }
-        // If steal correct -> keep turn
+        
+        // Load new question
         const list = currentRoom.team_questions[nextTeam.toString()] || []
         nextQuestion = list[nextIndex] ? { ...list[nextIndex], owner_team_id: nextTeam } : null
     } else {
@@ -468,7 +473,7 @@ export default function Team() {
     }
   }
 
-  // --- Render Helpers ---
+  // --- RENDER HELPERS ---
 
   const handleMultiChoiceSelect = (idx: number) => {
       const current = (selectedAnswer as number[]) || []
