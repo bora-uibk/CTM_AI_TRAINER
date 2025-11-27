@@ -4,7 +4,7 @@ import { useAuth } from '../contexts/AuthContext'
 import { 
   Users, Plus, LogIn, Crown, UserCheck, Send, RotateCcw, 
   Trophy, Loader, Clock, Target, Trash2, Sparkles,
-  Check, Square, CheckSquare, Type, Hash, CircleCheck, AlertCircle
+  Check, Square, CheckSquare, Type, Hash, CircleCheck, AlertCircle, BookOpen
 } from 'lucide-react'
 
 // --- Interfaces ---
@@ -73,8 +73,13 @@ export default function Team() {
   const [roomCode, setRoomCode] = useState('')
   
   const [loading, setLoading] = useState(false)
+  
+  // Answer State
   const [selectedAnswer, setSelectedAnswer] = useState<any>(null)
   const [timeRemaining, setTimeRemaining] = useState(0)
+  
+  // Documents State
+  const [availableDocuments, setAvailableDocuments] = useState<any[]>([])
   const [selectedDocuments, setSelectedDocuments] = useState<Set<string>>(new Set())
   
   // Settings
@@ -84,42 +89,37 @@ export default function Team() {
     timePerQuestion: 60
   })
 
-  // Refs for consistency in intervals/timeouts
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   // --- EFFECTS ---
 
-  // 1. Initial Load
   useEffect(() => {
     fetchRooms()
-    const saved = localStorage.getItem('selectedDocuments')
-    if (saved) setSelectedDocuments(new Set(JSON.parse(saved)))
+    fetchDocuments() // Load docs on mount
     
-    // Backup poller to ensure rooms list stays fresh
+    // Backup poller
     const roomPoller = setInterval(fetchRooms, 5000);
     return () => clearInterval(roomPoller);
   }, [])
 
-  // 2. Room Subscription (Participants & Game State)
+  // Room Subscription
   useEffect(() => {
     if (!currentRoom) return
 
-    // Initial fetch
     fetchParticipants()
 
     const channel = supabase
       .channel(`room-${currentRoom.id}`)
-      // Listen for Participant Changes (Join/Leave/Team Select)
+      // Listen for Participant Changes
       .on('postgres_changes', { 
         event: '*', 
         schema: 'public', 
         table: 'room_participants', 
         filter: `room_id=eq.${currentRoom.id}` 
       }, () => {
-          console.log('👥 Participant change detected, refetching...');
           fetchParticipants();
       })
-      // Listen for Game State Changes
+      // Listen for Game State
       .on('postgres_changes', { 
         event: 'UPDATE', 
         schema: 'public', 
@@ -131,16 +131,14 @@ export default function Team() {
           setCurrentRoom(prev => {
               if (!prev) return newRoom;
 
-              // Detect Turn Change or Question Change to reset timer
               if (newRoom.room_status === 'in_progress') {
                   if (newRoom.current_turn_team_id !== prev.current_turn_team_id || 
                       newRoom.current_question_index !== prev.current_question_index) {
                       setTimeRemaining(newRoom.time_per_question)
-                      setSelectedAnswer(null) // Reset local answer selection
+                      setSelectedAnswer(null) 
                   }
               }
 
-              // Preserve big JSON objects if Supabase didn't send them (optimization)
               return {
                   ...newRoom,
                   team_questions: (newRoom.team_questions && Object.keys(newRoom.team_questions).length > 0) 
@@ -152,18 +150,15 @@ export default function Team() {
       })
       .subscribe()
 
-    return () => { 
-        supabase.removeChannel(channel) 
-    }
+    return () => { supabase.removeChannel(channel) }
   }, [currentRoom?.id])
 
-  // 3. Local Timer
+  // Timer
   useEffect(() => {
     if (currentRoom?.room_status === 'in_progress') {
         timerRef.current = setInterval(() => {
             setTimeRemaining(prev => {
                 if (prev <= 1) {
-                    // Only host triggers "Time Up" action
                     if (currentRoom.created_by === user?.id) handleTimeUp();
                     return 0;
                 }
@@ -176,19 +171,18 @@ export default function Team() {
     return () => { if (timerRef.current) clearInterval(timerRef.current); }
   }, [currentRoom?.room_status, currentRoom?.current_turn_team_id, currentRoom?.current_question_index])
 
-
-  // 4. Host Logic: Consensus Checker
+  // Host Consensus Check
   useEffect(() => {
     if (!currentRoom || !user || currentRoom.room_status !== 'in_progress') return
     if (currentRoom.created_by === user.id) {
-        // Only run check if we have questions loaded
         if (currentRoom.team_questions && Object.keys(currentRoom.team_questions).length > 0) {
             checkTeamConsensus()
         }
     }
-  }, [currentRoom?.current_answers]) // Run specifically when answers change
+  }, [currentRoom?.current_answers]) 
 
-  // --- DATA FETCHING ---
+
+  // --- DATA HELPERS ---
 
   const fetchRooms = async () => {
     const { data } = await supabase
@@ -206,16 +200,43 @@ export default function Team() {
       .select('*')
       .eq('room_id', currentRoom.id)
     
-    if (error) console.error('Error fetching participants:', error)
-    else {
-        setParticipants(data || [])
-    }
+    if (!error) setParticipants(data || [])
   }
+
+  const fetchDocuments = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('documents')
+        .select('id, name, content')
+        .order('created_at', { ascending: false })
+
+      if (!error) {
+        const validDocs = (data || []).filter(doc => 
+          doc.content && doc.content.length > 50
+        )
+        setAvailableDocuments(validDocs)
+      }
+    } catch (error) { console.error(error) }
+  }
+
+  const toggleDocumentSelection = (docId: string) => {
+    const newSelected = new Set(selectedDocuments)
+    if (newSelected.has(docId)) newSelected.delete(docId)
+    else newSelected.add(docId)
+    setSelectedDocuments(newSelected)
+  }
+
 
   // --- ROOM ACTIONS ---
 
   const createRoom = async () => {
     if (!roomName.trim() || !user) return
+    
+    if (selectedDocuments.size === 0) {
+        alert("Please select at least one document (e.g. Rulebook).")
+        return
+    }
+
     setLoading(true)
     try {
       const code = Math.random().toString(36).substring(2, 8).toUpperCase()
@@ -240,7 +261,7 @@ export default function Team() {
 
       if (error) throw error
 
-      // Host joins as spectator initially (null team)
+      // Host joins as spectator
       await supabase.from('room_participants').insert({
           room_id: data.id,
           user_id: user.id,
@@ -251,7 +272,7 @@ export default function Team() {
       setCurrentRoom(data as ExtendedTeamRoom)
       setShowCreateRoom(false)
       setRoomName('')
-      fetchParticipants() // Immediate fetch
+      fetchParticipants()
     } catch (error) {
       console.error('Error creating room:', error)
     } finally {
@@ -284,7 +305,7 @@ export default function Team() {
             room_id: room.id,
             user_id: user.id,
             user_email: user.email || '',
-            team_number: null // Join as spectator first
+            team_number: null 
         })
       }
 
@@ -301,7 +322,7 @@ export default function Team() {
 
   const deleteRoom = async (roomId: string) => {
     if (!user) return
-    if (!window.confirm("Are you sure you want to close this room?")) return
+    if (!window.confirm("Are you sure?")) return
     setLoading(true)
     try {
       await supabase.from('team_rooms').delete().eq('id', roomId).eq('created_by', user.id)
@@ -325,20 +346,32 @@ export default function Team() {
     } catch (error) { console.error(error) }
   }
 
-  // --- LOBBY ACTIONS ---
+  // --- LOBBY LOGIC (FIXED TEAM JOINING) ---
 
   const handleJoinTeam = async (teamNum: number) => {
       if (!currentRoom || !user) return
       try {
-          await supabase
+          // 1. Database Update
+          const { error } = await supabase
             .from('room_participants')
             .update({ team_number: teamNum })
             .eq('room_id', currentRoom.id)
             .eq('user_id', user.id)
           
-          // Optimistic UI update for speed
-          setParticipants(prev => prev.map(p => p.user_id === user.id ? {...p, team_number: teamNum} : p))
-      } catch (error) { console.error(error) }
+          if (error) throw error
+
+          // 2. Immediate State Update (don't wait for realtime)
+          setParticipants(prev => 
+              prev.map(p => p.user_id === user.id ? { ...p, team_number: teamNum } : p)
+          )
+          
+          // 3. Force Fetch to verify
+          await fetchParticipants()
+
+      } catch (error: any) {
+          console.error("Error joining team:", error)
+          alert("Failed to join team. Please try again.")
+      }
   }
 
   // --- GAME LOGIC ---
@@ -346,22 +379,24 @@ export default function Team() {
   const startGame = async () => {
     if (!currentRoom || currentRoom.created_by !== user?.id) return
     
-    // Check if teams have players
+    // Validation
     const t1Count = participants.filter(p => p.team_number === 1).length
     const t2Count = participants.filter(p => p.team_number === 2).length
+    
     if (t1Count === 0 || t2Count === 0) {
-        alert("Both teams need at least 1 player to start.");
-        return;
+        alert("Waiting for players... Both teams need at least 1 member.")
+        return
     }
 
     setLoading(true)
     try {
       const totalQuestions = 2 * currentRoom.questions_per_team
       
+      // Send selected documents from Host's state
       const { data, error } = await supabase.functions.invoke('generate-quiz', {
         body: { 
           count: totalQuestions,
-          selectedDocuments: Array.from(selectedDocuments)
+          selectedDocuments: Array.from(selectedDocuments) 
         }
       })
 
@@ -372,7 +407,6 @@ export default function Team() {
       teamQuestions["1"] = data.questions.slice(0, currentRoom.questions_per_team)
       teamQuestions["2"] = data.questions.slice(currentRoom.questions_per_team, totalQuestions)
       
-      // First question belongs to Team 1
       const firstQ = { ...teamQuestions["1"][0], owner_team_id: 1 }
 
       await supabase.from('team_rooms').update({
@@ -395,47 +429,37 @@ export default function Team() {
 
   const submitAnswer = async () => {
     if (!currentRoom || !user || selectedAnswer === null) return
-    // Input validation
-    if (Array.isArray(selectedAnswer) && selectedAnswer.length === 0) return;
-    if (typeof selectedAnswer === 'string' && selectedAnswer.trim() === '') return;
+    
+    const participant = participants.find(p => p.user_id === user.id)
+    if (!participant || !participant.team_number) return // Safety check
 
     const currentAnswers = currentRoom.current_answers || {}
-    // Save answer
+    
     currentAnswers[user.id] = {
       answer: selectedAnswer,
       user_email: user.email,
-      team_number: participants.find(p => p.user_id === user.id)?.team_number
+      team_number: participant.team_number
     }
 
-    await supabase
-      .from('team_rooms')
-      .update({ current_answers: currentAnswers })
-      .eq('id', currentRoom.id)
+    await supabase.from('team_rooms').update({ current_answers: currentAnswers }).eq('id', currentRoom.id)
   }
 
-  // --- Host Logic: Advance Game ---
   const checkTeamConsensus = async () => {
     if (!currentRoom) return
-    
-    const turnTeam = currentRoom.current_turn_team_id
-    const teamMembers = participants.filter(p => p.team_number === turnTeam)
-    if (teamMembers.length === 0) return // Should not happen if start checks are valid
+    const teamMembers = participants.filter(p => p.team_number === currentRoom.current_turn_team_id)
+    if (teamMembers.length === 0) return
 
     const answersMap = currentRoom.current_answers || {}
-    
-    // Get answers from current team members only
     const submissions = teamMembers
         .map(m => answersMap[m.user_id])
         .filter(a => a !== undefined)
 
-    // Check if everyone answered
+    // Check if everyone on the active team has submitted
     if (submissions.length === teamMembers.length && submissions.length > 0) {
         const firstAns = submissions[0].answer
-        // Check if all answers are identical (JSON stringify handles arrays/objects)
         const allSame = submissions.every(sub => JSON.stringify(sub.answer) === JSON.stringify(firstAns))
 
         if (allSame) {
-            // Artificial delay for UX
             setTimeout(() => advanceToNextQuestion(firstAns), 1000)
         }
     }
@@ -450,7 +474,6 @@ export default function Team() {
     const currentTeam = currentRoom.current_turn_team_id
     const isCorrect = teamAnswer === 'PASS' ? false : isAnswerCorrect(teamAnswer, currentQ.correct_answer, currentQ.type)
     
-    // Determine Ownership and Steal Status
     const originalOwner = currentQ.owner_team_id || currentTeam
     const isStealAttempt = currentTeam !== originalOwner
     
@@ -459,71 +482,51 @@ export default function Team() {
     let nextQuestion: GameQuestion | null = null
     const teamScores = { ...currentRoom.team_scores }
 
-    console.log(`📝 Answer Checked: ${isCorrect}. Steal? ${isStealAttempt}. Owner: ${originalOwner}`)
-
     if (isCorrect) {
-        // Point for correct answer
         teamScores[currentTeam.toString()] = (teamScores[currentTeam.toString()] || 0) + 1
         
-        if (isStealAttempt) {
-            // Steal successful: Stealing team gets to KEEP the turn and answer their own next question
-            // Turn stays with currentTeam (the stealer)
-            nextTeam = currentTeam
-            // BUT they need a NEW question (from their own deck)
-            // Note: current_question_index is global relative to deck progression per team? 
-            // Strategy: If T2 steals from T1, T2 answers T1's Q. Then T2 gets their own Q.
-            const list = currentRoom.team_questions[nextTeam.toString()] || []
-            nextQuestion = list[nextIndex] ? { ...list[nextIndex], owner_team_id: nextTeam } : null
-        } else {
-            // Normal correct: Pass turn to other team
-            nextTeam = (currentTeam % 2) + 1
-            // If Team 2 just finished their turn, we move to next index (Round complete)
-            if (currentTeam === 2) nextIndex++
-            
-            const list = currentRoom.team_questions[nextTeam.toString()] || []
-            nextQuestion = list[nextIndex] ? { ...list[nextIndex], owner_team_id: nextTeam } : null
-        }
-    } else {
-        // Wrong Answer
         if (!isStealAttempt) {
-            // Failed own question -> Opponent gets a chance to STEAL
+             // Normal correct -> Switch turn
+             nextTeam = (currentTeam % 2) + 1
+             // If Team 2 finished, increment round index
+             if (currentTeam === 2) nextIndex++
+        }
+        
+        // Load next question based on who is playing next
+        const list = currentRoom.team_questions[nextTeam.toString()] || []
+        nextQuestion = list[nextIndex] ? { ...list[nextIndex], owner_team_id: nextTeam } : null
+
+    } else {
+        // Wrong
+        if (!isStealAttempt) {
+            // Failed own -> Give opponent chance to steal SAME question
             nextTeam = (currentTeam % 2) + 1
-            nextQuestion = currentQ // Keep SAME question for steal
+            nextQuestion = currentQ 
         } else {
-            // Failed steal -> Turn goes back to Original Owner (who already missed it)
-            // Effectively, the round for this question ends.
-            // Turn goes to the original owner to start THEIR next question? 
-            // No, standard flow: T1 wrong -> T2 steal wrong -> T2 gets their OWN question.
-            nextTeam = currentTeam // The stealer (who just failed) keeps turn to answer their own Q?
-            // Actually usually: T1 misses -> T2 tries -> T2 misses -> T2 starts their normal turn.
-            
-            // Let's assume turn passes to the stealer (who is now the active player for their own Q)
-            nextTeam = currentTeam 
+            // Failed steal -> Back to owner (currentTeam)
+            nextTeam = currentTeam
             const list = currentRoom.team_questions[nextTeam.toString()] || []
             nextQuestion = list[nextIndex] ? { ...list[nextIndex], owner_team_id: nextTeam } : null
         }
     }
 
-    // Check End of Game
     if (nextIndex >= currentRoom.questions_per_team) {
         await supabase.from('team_rooms').update({
             room_status: 'finished', 
             team_scores: teamScores
         }).eq('id', currentRoom.id)
         
-        // Trigger Feedback
         await supabase.functions.invoke('generate-feedback', {
             body: { scores: teamScores, questions: currentRoom.team_questions }
         }).then(({data}) => {
             if(data) supabase.from('team_rooms').update({ feedback: data }).eq('id', currentRoom.id)
         })
     } else {
-        // Proceed
         await supabase.from('team_rooms').update({
             current_turn_team_id: nextTeam,
             current_question_index: nextIndex,
             current_question: nextQuestion,
-            current_answers: {}, // Reset answers
+            current_answers: {},
             team_scores: teamScores
         }).eq('id', currentRoom.id)
     }
@@ -535,7 +538,7 @@ export default function Team() {
     }
   }
 
-  // --- RENDER HELPERS ---
+  // --- UI COMPONENTS ---
 
   const handleMultiChoiceSelect = (idx: number) => {
       const current = (selectedAnswer as number[]) || []
@@ -545,7 +548,6 @@ export default function Team() {
 
   const renderQuestionInput = (question: GameQuestion) => {
     if (!question) return null;
-    
     const { type, options } = question
 
     if (type === 'single_choice') {
@@ -605,376 +607,230 @@ export default function Team() {
     }
   }
 
-  // ==================== RENDER VIEWS ====================
+  // ==================== MAIN RENDER ====================
 
-  // 1. FINISHED VIEW
+  // 1. FINISHED
   if (currentRoom?.room_status === 'finished') {
       const sorted = Object.entries(currentRoom.team_scores).sort(([,a],[,b])=>b-a)
       const feedback = currentRoom.feedback
-
       return (
         <div className="max-w-4xl mx-auto space-y-6 px-4">
             <div className="text-center"><h1 className="text-2xl font-bold text-gray-900 mb-2">Game Finished!</h1><p className="text-gray-600">{currentRoom.name}</p></div>
             <div className="card">
-              <h2 className="text-xl font-semibold text-gray-900 mb-6 text-center">Final Results</h2>
+              <h2 className="text-xl font-semibold text-gray-900 mb-6 text-center">Results</h2>
               <div className="space-y-4">
-                {sorted.map(([teamId, score], index) => {
-                  const members = participants.filter(p => p.team_number === parseInt(teamId))
-                  return (
+                {sorted.map(([teamId, score], index) => (
                     <div key={teamId} className={`p-4 rounded-lg border-2 ${index===0?'border-yellow-400 bg-yellow-50':'border-gray-200 bg-gray-50'}`}>
-                      <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center justify-between">
                         <div className="flex items-center space-x-2">{index===0 && <Crown className="w-5 h-5 text-yellow-500" />}<h3 className="font-semibold text-gray-900">Team {teamId}</h3></div>
                         <div className="text-2xl font-bold text-primary-600">{score} pts</div>
                       </div>
-                      <div className="text-sm text-gray-600">Members: {members.map(m => m.user_email).join(', ')}</div>
                     </div>
-                  )
-                })}
+                ))}
               </div>
             </div>
-            
-            {/* AI Feedback Section */}
+            {/* Feedback UI */}
             <div className="card border-blue-200 bg-blue-50">
-                <div className="flex items-center space-x-2 mb-4">
-                    <Sparkles className="w-5 h-5 text-blue-600" />
-                    <h3 className="text-lg font-semibold text-blue-900">AI Analysis</h3>
-                </div>
+                <div className="flex items-center space-x-2 mb-4"><Sparkles className="w-5 h-5 text-blue-600" /><h3 className="text-lg font-semibold text-blue-900">AI Analysis</h3></div>
                 {feedback ? (
                     <div className="space-y-4">
-                        {feedback.summary && <div className="bg-white p-4 rounded-lg shadow-sm"><h4 className="font-medium mb-2">Summary</h4><p className="text-gray-700">{feedback.summary}</p></div>}
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            {feedback.strengths && <div className="bg-green-50 p-4 rounded-lg border border-green-100"><h4 className="font-medium text-green-900 mb-2">Strengths</h4><ul className="list-disc list-inside text-green-800 text-sm">{feedback.strengths.map((s,i)=><li key={i}>{s}</li>)}</ul></div>}
-                            {feedback.weak_points && <div className="bg-red-50 p-4 rounded-lg border border-red-100"><h4 className="font-medium text-red-900 mb-2">Improvements</h4><ul className="list-disc list-inside text-red-800 text-sm">{feedback.weak_points.map((w,i)=><li key={i}>{w}</li>)}</ul></div>}
-                        </div>
-                        {feedback.detailed_analysis && <div className="bg-white p-4 rounded-lg shadow-sm"><h4 className="font-medium mb-2">Insights</h4><p className="text-sm text-gray-700 whitespace-pre-wrap">{feedback.detailed_analysis}</p></div>}
+                        {feedback.summary && <p className="text-gray-700">{feedback.summary}</p>}
+                        {/* Render detailed feedback here */}
                     </div>
-                ) : (
-                    <div className="text-center py-8"><Loader className="w-8 h-8 text-blue-600 animate-spin mx-auto mb-2" /><p className="text-blue-800">Generating feedback...</p></div>
-                )}
+                ) : <p className="text-blue-800 text-center">Generating...</p>}
             </div>
-            <div className="mt-8 text-center flex justify-center space-x-4"><button onClick={leaveRoom} className="btn-primary">Leave Room</button></div>
+            <div className="mt-8 text-center"><button onClick={leaveRoom} className="btn-primary">Leave Room</button></div>
         </div>
       )
   }
 
-  // 2. IN PROGRESS VIEW
+  // 2. IN PROGRESS
   if (currentRoom && currentRoom.room_status === 'in_progress') {
-      const myParticipant = participants.find(p => p.user_id === user?.id)
-      const myTeamId = myParticipant?.team_number
-      
-      // Correct Logic: It is your turn if your team matches the current turn team
-      const isUserTurn = myTeamId === currentRoom.current_turn_team_id
-      
+      const isUserTurn = participants.find(p => p.user_id === user?.id)?.team_number === currentRoom.current_turn_team_id
       const hasAnswered = user?.id && currentRoom.current_answers?.[user.id]
       const isStealMode = currentRoom.current_question?.owner_team_id !== currentRoom.current_turn_team_id
 
-      // Ensure current question exists before rendering
-      const questionData = currentRoom.current_question
-
       return (
-          <div className="max-w-6xl mx-auto px-4 grid grid-cols-1 lg:grid-cols-4 gap-6">
-              {/* Main Game Board */}
-              <div className="lg:col-span-3 space-y-4">
-                  {/* Header Bar */}
-                  <div className="flex justify-between items-center bg-white p-4 rounded-xl shadow-sm border border-gray-200">
-                      <div className="flex items-center gap-3">
-                          <div className="p-2 bg-primary-50 rounded text-primary-700">
-                             <Target className="w-5 h-5"/>
-                          </div>
-                          <div>
-                              <h2 className="font-bold text-lg">Round {currentRoom.current_question_index + 1}</h2>
-                              <p className="text-xs text-gray-500 uppercase tracking-wide">Question {currentRoom.current_question_index + 1} of {currentRoom.questions_per_team}</p>
-                          </div>
-                      </div>
-                      <div className={`flex items-center gap-2 font-mono text-2xl font-bold px-4 py-2 rounded-lg border ${timeRemaining<10?'text-red-600 border-red-100 bg-red-50':'text-gray-700 border-gray-200'}`}>
-                          <Clock className="w-5 h-5"/> {formatTime(timeRemaining)}
-                      </div>
+          <div className="max-w-5xl mx-auto px-4 grid grid-cols-1 lg:grid-cols-3 gap-6">
+              <div className="lg:col-span-2 space-y-4">
+                  <div className="flex justify-between items-center bg-white p-4 rounded-xl shadow-sm">
+                      <div className="flex items-center gap-2"><Target className="text-primary-600"/><span className="font-bold text-lg">Round {currentRoom.current_question_index + 1}</span></div>
+                      <div className={`flex items-center gap-2 font-mono text-xl font-bold ${timeRemaining<10?'text-red-600':'text-gray-700'}`}><Clock className="w-5 h-5"/> {formatTime(timeRemaining)}</div>
                   </div>
-
-                  {/* Question Card */}
-                  <div className={`card p-8 min-h-[400px] relative ${isStealMode ? 'ring-4 ring-orange-300' : ''}`}>
-                      {isStealMode && (
-                          <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-orange-500 text-white px-4 py-1 rounded-full text-sm font-bold shadow-lg animate-bounce">
-                             ⚠️ STEAL OPPORTUNITY
-                          </div>
-                      )}
-
-                      <div className="mb-6 flex justify-between items-center">
-                          <span className={`badge ${currentRoom.current_turn_team_id === 1 ? 'badge-blue' : 'badge-purple'}`}>
-                            Team {currentRoom.current_turn_team_id}'s Turn
-                          </span>
-                          {isUserTurn ? (
-                              <span className="text-sm font-bold text-green-600 flex items-center"><UserCheck className="w-4 h-4 mr-1"/> Your Turn</span>
-                          ) : (
-                              <span className="text-sm font-bold text-gray-400 flex items-center"><Loader className="w-4 h-4 mr-1 animate-spin"/> Opponent Thinking</span>
-                          )}
+                  <div className="card p-8">
+                      <div className="mb-4 flex justify-between items-center">
+                          <span className="badge badge-blue">Team {currentRoom.current_turn_team_id}'s Turn</span>
+                          {isStealMode && <span className="badge badge-orange">STEAL!</span>}
                       </div>
-                      
-                      {questionData ? (
+                      {currentRoom.current_question ? (
                           <>
-                             <h2 className="text-2xl font-bold text-gray-900 mb-8 leading-relaxed">{questionData.question}</h2>
-                             
-                             {/* Pass question object specifically to render */}
-                             {renderQuestionInput(questionData)}
-                             
-                             {isUserTurn && !hasAnswered && (
-                                 <button 
-                                    onClick={submitAnswer} 
-                                    disabled={selectedAnswer === null || (typeof selectedAnswer==='string' && !selectedAnswer.trim())}
-                                    className="btn-primary w-full mt-8 py-4 text-lg shadow-lg hover:shadow-xl transition-all"
-                                 >
-                                    Submit Answer
-                                 </button>
-                             )}
-
-                             {hasAnswered && (
-                                 <div className="mt-8 p-4 bg-green-50 border border-green-200 text-green-800 rounded-xl text-center font-bold animate-in fade-in zoom-in">
-                                     Answer Submitted! Waiting for teammates...
-                                 </div>
-                             )}
-
-                             {!isUserTurn && (
-                                 <div className="mt-8 p-4 bg-gray-50 border border-gray-200 text-gray-500 rounded-xl text-center">
-                                     Please wait for Team {currentRoom.current_turn_team_id} to answer...
-                                 </div>
-                             )}
+                             <h2 className="text-xl font-bold mb-6">{currentRoom.current_question.question}</h2>
+                             {renderQuestionInput(currentRoom.current_question)}
+                             {isUserTurn && !hasAnswered && <button onClick={submitAnswer} className="btn-primary w-full mt-6 py-3">Submit Answer</button>}
+                             {hasAnswered && <div className="mt-6 p-3 bg-green-50 text-green-700 rounded text-center font-bold">Answer Submitted</div>}
+                             {!isUserTurn && <div className="mt-6 p-3 bg-gray-50 text-gray-500 rounded text-center">Waiting for opponent...</div>}
                           </>
-                      ) : <div className="py-20 text-center"><Loader className="w-10 h-10 animate-spin mx-auto text-gray-400"/></div>}
+                      ) : <Loader className="animate-spin mx-auto"/>}
                   </div>
               </div>
-
-              {/* Sidebar: Info */}
               <div className="space-y-4">
-                   {/* Scoreboard */}
-                   <div className="card p-4">
-                       <h3 className="text-xs font-bold text-gray-500 uppercase mb-3">Scoreboard</h3>
-                       <div className="space-y-2">
-                           {[1,2].map(t => (
-                               <div key={t} className={`flex justify-between items-center p-3 rounded-lg border transition-all ${currentRoom.current_turn_team_id===t ? 'border-primary-500 bg-primary-50 scale-105 shadow-sm' : 'border-gray-200 bg-white'}`}>
-                                   <div className="flex items-center gap-2">
-                                       <div className={`w-2 h-8 rounded-full ${t===1?'bg-blue-500':'bg-purple-500'}`}/>
-                                       <span className="font-bold text-gray-700">Team {t}</span>
-                                   </div>
-                                   <span className="text-xl font-bold text-gray-900">{currentRoom.team_scores[t]}</span>
-                               </div>
-                           ))}
-                       </div>
-                   </div>
-
-                   {/* Team Status */}
-                   <div className="card p-4">
-                       <h3 className="text-xs font-bold text-gray-500 uppercase mb-3">Team Consensus</h3>
-                       <div className="space-y-1">
-                           {participants.filter(p => p.team_number === currentRoom.current_turn_team_id).map(p => (
-                               <div key={p.id} className="flex justify-between items-center p-2 hover:bg-gray-50 rounded">
-                                   <div className="flex items-center gap-2 overflow-hidden">
-                                       <div className="w-6 h-6 rounded-full bg-gray-200 flex items-center justify-center text-xs font-bold text-gray-600">
-                                           {p.user_email?.charAt(0).toUpperCase()}
-                                       </div>
-                                       <span className="text-sm text-gray-700 truncate max-w-[100px]">{p.user_email?.split('@')[0]}</span>
-                                   </div>
-                                   {currentRoom.current_answers?.[p.user_id] ? 
-                                      <CircleCheck className="w-5 h-5 text-green-500 flex-shrink-0"/> : 
-                                      <div className="w-5 h-5 rounded-full border-2 border-gray-200 flex-shrink-0"/>
-                                   }
-                               </div>
-                           ))}
-                       </div>
-                   </div>
+                   <div className="card"><h3 className="font-bold mb-4">Scoreboard</h3>{/* Scores */}</div>
+                   <div className="card"><h3 className="font-bold mb-4">Consensus</h3>{/* Participants */}</div>
               </div>
           </div>
       )
   }
 
-  // 3. LOBBY VIEW
+  // 3. LOBBY
   if (currentRoom && currentRoom.room_status === 'lobby') {
+      // Derived logic to split participants
       const myTeam = participants.find(p => p.user_id === user?.id)?.team_number
-      const spectators = participants.filter(p => p.team_number === null)
+      const team1Players = participants.filter(p => p.team_number === 1)
+      const team2Players = participants.filter(p => p.team_number === 2)
+      const spectators = participants.filter(p => p.team_number === null || p.team_number === undefined)
       
       return (
-          <div className="max-w-5xl mx-auto px-4">
-              <div className="text-center mb-12">
-                  <h1 className="text-3xl font-bold text-gray-900 mb-2">{currentRoom.name}</h1>
-                  <div className="inline-flex items-center gap-2 bg-white px-6 py-2 rounded-full shadow-sm border border-gray-200">
-                      <span className="text-gray-500 uppercase text-xs font-bold tracking-wider">Room Code</span>
-                      <span className="font-mono text-xl font-bold text-primary-600 tracking-widest">{currentRoom.code}</span>
-                  </div>
+          <div className="max-w-4xl mx-auto px-4">
+              <div className="text-center mb-8">
+                  <h1 className="text-2xl font-bold">{currentRoom.name}</h1>
+                  <p className="text-gray-500">Code: <span className="font-mono font-bold text-lg text-primary-600">{currentRoom.code}</span></p>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
-                  {/* Team 1 Panel */}
-                  <div className={`card border-t-4 border-t-blue-500 ${myTeam===1 ? 'ring-2 ring-blue-500 ring-offset-2' : ''}`}>
+                  {/* TEAM 1 */}
+                  <div className={`card border-t-4 border-t-blue-500 ${myTeam===1 ? 'ring-2 ring-blue-500' : ''}`}>
                       <div className="text-center mb-6">
                           <h3 className="text-xl font-bold text-gray-900">Team 1</h3>
-                          <p className="text-sm text-gray-500">{participants.filter(p=>p.team_number===1).length} Players</p>
+                          <p className="text-sm text-gray-500">{team1Players.length} Players</p>
                       </div>
-                      <div className="space-y-2 mb-6 min-h-[150px]">
-                          {participants.filter(p => p.team_number === 1).map(p => (
-                              <div key={p.id} className="flex items-center gap-3 p-3 bg-blue-50 rounded-lg border border-blue-100">
-                                  <div className="w-8 h-8 bg-blue-200 rounded-full flex items-center justify-center text-blue-700 font-bold">
-                                      {p.user_email?.charAt(0).toUpperCase()}
-                                  </div>
-                                  <span className="font-medium text-gray-700">{p.user_email}</span>
-                                  {p.user_id === currentRoom.created_by && <Crown className="w-4 h-4 text-yellow-500 ml-auto"/>}
+                      <div className="space-y-2 mb-6 min-h-[100px]">
+                          {team1Players.map(p => (
+                              <div key={p.id} className="flex items-center gap-2 p-2 bg-blue-50 rounded">
+                                  <div className="w-6 h-6 bg-blue-200 rounded-full flex items-center justify-center text-xs text-blue-700 font-bold">{p.user_email?.charAt(0)}</div>
+                                  <span className="text-sm">{p.user_email}</span>
                               </div>
                           ))}
                       </div>
-                      <button 
-                         onClick={() => handleJoinTeam(1)}
-                         disabled={myTeam === 1}
-                         className={`w-full py-3 rounded-lg font-bold transition-all ${
-                             myTeam === 1 
-                             ? 'bg-blue-100 text-blue-700 cursor-default'
-                             : 'bg-blue-600 text-white hover:bg-blue-700 shadow-md hover:shadow-lg'
-                         }`}
-                      >
-                          {myTeam === 1 ? 'Joined Team 1' : 'Join Team 1'}
-                      </button>
+                      <button onClick={() => handleJoinTeam(1)} disabled={myTeam === 1} className="btn-primary w-full bg-blue-600 hover:bg-blue-700">Join Team 1</button>
                   </div>
 
-                  {/* Team 2 Panel */}
-                  <div className={`card border-t-4 border-t-purple-500 ${myTeam===2 ? 'ring-2 ring-purple-500 ring-offset-2' : ''}`}>
+                  {/* TEAM 2 */}
+                  <div className={`card border-t-4 border-t-purple-500 ${myTeam===2 ? 'ring-2 ring-purple-500' : ''}`}>
                       <div className="text-center mb-6">
                           <h3 className="text-xl font-bold text-gray-900">Team 2</h3>
-                          <p className="text-sm text-gray-500">{participants.filter(p=>p.team_number===2).length} Players</p>
+                          <p className="text-sm text-gray-500">{team2Players.length} Players</p>
                       </div>
-                      <div className="space-y-2 mb-6 min-h-[150px]">
-                          {participants.filter(p => p.team_number === 2).map(p => (
-                              <div key={p.id} className="flex items-center gap-3 p-3 bg-purple-50 rounded-lg border border-purple-100">
-                                  <div className="w-8 h-8 bg-purple-200 rounded-full flex items-center justify-center text-purple-700 font-bold">
-                                      {p.user_email?.charAt(0).toUpperCase()}
-                                  </div>
-                                  <span className="font-medium text-gray-700">{p.user_email}</span>
+                      <div className="space-y-2 mb-6 min-h-[100px]">
+                          {team2Players.map(p => (
+                              <div key={p.id} className="flex items-center gap-2 p-2 bg-purple-50 rounded">
+                                  <div className="w-6 h-6 bg-purple-200 rounded-full flex items-center justify-center text-xs text-purple-700 font-bold">{p.user_email?.charAt(0)}</div>
+                                  <span className="text-sm">{p.user_email}</span>
                               </div>
                           ))}
                       </div>
-                      <button 
-                         onClick={() => handleJoinTeam(2)}
-                         disabled={myTeam === 2}
-                         className={`w-full py-3 rounded-lg font-bold transition-all ${
-                             myTeam === 2 
-                             ? 'bg-purple-100 text-purple-700 cursor-default'
-                             : 'bg-purple-600 text-white hover:bg-purple-700 shadow-md hover:shadow-lg'
-                         }`}
-                      >
-                          {myTeam === 2 ? 'Joined Team 2' : 'Join Team 2'}
-                      </button>
+                      <button onClick={() => handleJoinTeam(2)} disabled={myTeam === 2} className="btn-primary w-full bg-purple-600 hover:bg-purple-700">Join Team 2</button>
                   </div>
               </div>
 
-              {/* Waiting Area */}
+              {/* Waiting List */}
               {spectators.length > 0 && (
-                  <div className="max-w-2xl mx-auto mb-8 bg-gray-50 rounded-xl p-4 text-center border border-gray-200">
-                      <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-3">In Lobby (Waiting for Team Selection)</h4>
+                  <div className="bg-gray-50 rounded-xl p-4 text-center mb-8">
+                      <h4 className="text-xs font-bold text-gray-500 uppercase mb-3">Undecided Players</h4>
                       <div className="flex flex-wrap justify-center gap-2">
                           {spectators.map(p => (
-                              <span key={p.id} className="px-3 py-1 bg-white border border-gray-300 rounded-full text-sm text-gray-600 flex items-center">
-                                  <div className="w-2 h-2 bg-gray-400 rounded-full mr-2"/>
-                                  {p.user_email}
-                              </span>
+                              <span key={p.id} className="px-3 py-1 bg-white border rounded-full text-sm text-gray-600">{p.user_email}</span>
                           ))}
                       </div>
                   </div>
               )}
 
-              {/* Host Controls */}
               {currentRoom.created_by === user?.id && (
-                  <div className="text-center space-y-4">
-                      <button 
-                        onClick={startGame} 
-                        disabled={loading || participants.some(p => p.team_number === null)}
-                        className="btn-primary px-16 py-4 text-xl shadow-xl hover:scale-105 transition-transform"
-                      >
-                          {loading ? <Loader className="animate-spin w-6 h-6"/> : "START GAME"}
+                  <div className="text-center">
+                      <button onClick={startGame} disabled={loading || team1Players.length === 0 || team2Players.length === 0} className="btn-primary px-12 py-4 text-lg shadow-lg">
+                          {loading ? <Loader className="animate-spin"/> : "Start Game"}
                       </button>
-                      {participants.some(p => p.team_number === null) && (
-                          <div className="flex items-center justify-center text-orange-600 text-sm font-medium bg-orange-50 inline-block px-4 py-2 rounded-lg">
-                              <AlertCircle className="w-4 h-4 mr-2"/>
-                              Wait for all players to select a team
-                          </div>
-                      )}
                   </div>
               )}
-              <div className="text-center mt-8"><button onClick={leaveRoom} className="text-gray-500 hover:text-gray-800 underline text-sm">Leave Lobby</button></div>
           </div>
       )
   }
 
-  // 4. MAIN DASHBOARD
+  // 4. MAIN DASHBOARD (Create Room with Docs)
   return (
     <div className="max-w-2xl mx-auto px-4">
        <h1 className="text-3xl font-bold text-center mb-8">Team Challenge</h1>
-       
-       <div className="grid gap-6 mb-8">
-           {/* Create */}
-           <div className="card p-6 hover:shadow-md transition-shadow">
+       <div className="grid gap-6">
+           <div className="card p-6">
                <div className="flex items-center gap-3 mb-4">
                    <div className="p-2 bg-primary-100 rounded-lg"><Plus className="w-6 h-6 text-primary-600"/></div>
                    <h2 className="text-xl font-bold">Host a Game</h2>
                </div>
                {showCreateRoom ? (
-                   <div className="space-y-4 animate-in fade-in slide-in-from-top-2">
+                   <div className="space-y-4 animate-in fade-in">
                        <input className="input-field" placeholder="Room Name" value={roomName} onChange={e=>setRoomName(e.target.value)} />
-                       <div className="grid grid-cols-2 gap-4">
-                           <div>
-                               <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">Questions/Team</label>
-                               <input type="number" className="input-field" value={roomSettings.questionsPerTeam} onChange={e=>setRoomSettings(s=>({...s, questionsPerTeam: parseInt(e.target.value)||1}))} min="1"/>
-                           </div>
-                           <div>
-                               <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">Time (sec)</label>
-                               <input type="number" className="input-field" value={roomSettings.timePerQuestion} onChange={e=>setRoomSettings(s=>({...s, timePerQuestion: parseInt(e.target.value)||10}))} min="10" step="5"/>
+                       
+                       {/* Document Selection Added Here */}
+                       <div>
+                           <label className="text-xs font-bold text-gray-500 uppercase mb-2 block">Knowledge Base</label>
+                           <div className="border rounded-lg max-h-32 overflow-y-auto">
+                               {availableDocuments.map(doc => (
+                                   <div key={doc.id} onClick={()=>toggleDocumentSelection(doc.id)} className={`p-2 cursor-pointer text-sm flex items-center gap-2 ${selectedDocuments.has(doc.id) ? 'bg-primary-50' : ''}`}>
+                                       <div className={`w-4 h-4 border rounded ${selectedDocuments.has(doc.id)?'bg-primary-600 border-primary-600':''}`}>{selectedDocuments.has(doc.id)&&<Check className="w-3 h-3 text-white"/>}</div>
+                                       {doc.name}
+                                   </div>
+                               ))}
                            </div>
                        </div>
-                       <div className="flex gap-3 pt-2">
-                           <button onClick={createRoom} disabled={loading} className="btn-primary flex-1">Create Room</button>
+
+                       <div className="grid grid-cols-2 gap-4">
+                           <div>
+                               <label className="text-xs font-bold text-gray-500 uppercase">Questions/Team</label>
+                               <input type="number" className="input-field" value={roomSettings.questionsPerTeam} onChange={e=>setRoomSettings(s=>({...s, questionsPerTeam: parseInt(e.target.value)}))} min="1"/>
+                           </div>
+                           <div>
+                               <label className="text-xs font-bold text-gray-500 uppercase">Time (sec)</label>
+                               <input type="number" className="input-field" value={roomSettings.timePerQuestion} onChange={e=>setRoomSettings(s=>({...s, timePerQuestion: parseInt(e.target.value)}))} min="10"/>
+                           </div>
+                       </div>
+                       <div className="flex gap-3">
+                           <button onClick={createRoom} disabled={loading} className="btn-primary flex-1">Create</button>
                            <button onClick={()=>setShowCreateRoom(false)} className="btn-secondary">Cancel</button>
                        </div>
                    </div>
-               ) : <button onClick={()=>setShowCreateRoom(true)} className="btn-primary w-full py-3">Create New Room</button>}
+               ) : <button onClick={()=>setShowCreateRoom(true)} className="btn-primary w-full">Create Room</button>}
            </div>
 
-           {/* Join */}
-           <div className="card p-6 hover:shadow-md transition-shadow">
+           <div className="card p-6">
                <div className="flex items-center gap-3 mb-4">
                    <div className="p-2 bg-green-100 rounded-lg"><LogIn className="w-6 h-6 text-green-600"/></div>
                    <h2 className="text-xl font-bold">Join a Game</h2>
                </div>
                {showJoinRoom ? (
-                   <div className="space-y-4 animate-in fade-in slide-in-from-top-2">
+                   <div className="space-y-4 animate-in fade-in">
                        <input className="input-field text-center font-mono text-2xl tracking-widest uppercase" placeholder="CODE" maxLength={6} value={roomCode} onChange={e=>setRoomCode(e.target.value)} />
-                       <div className="flex gap-3 pt-2">
-                           <button onClick={joinRoom} disabled={loading} className="btn-primary flex-1 bg-green-600 hover:bg-green-700">Enter Lobby</button>
+                       <div className="flex gap-3">
+                           <button onClick={joinRoom} disabled={loading} className="btn-primary flex-1 bg-green-600 hover:bg-green-700">Join Lobby</button>
                            <button onClick={()=>setShowJoinRoom(false)} className="btn-secondary">Cancel</button>
                        </div>
                    </div>
-               ) : <button onClick={()=>setShowJoinRoom(true)} className="btn-secondary w-full py-3">Enter Code</button>}
+               ) : <button onClick={()=>setShowJoinRoom(true)} className="btn-secondary w-full">Enter Code</button>}
            </div>
        </div>
-
+       
        {/* Active Rooms List */}
        {rooms.length > 0 && (
           <div className="mt-8">
-              <h2 className="text-lg font-bold text-gray-900 mb-4 flex items-center">
-                <Trophy className="w-5 h-5 mr-2 text-yellow-500"/> Active Public Rooms
-              </h2>
+              <h2 className="text-lg font-bold text-gray-900 mb-4 flex items-center"><Trophy className="w-5 h-5 mr-2 text-yellow-500"/> Active Rooms</h2>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   {rooms.map(room => (
-                      <div key={room.id} className="group bg-white border border-gray-200 rounded-xl p-4 hover:border-primary-300 hover:shadow-md transition-all relative cursor-pointer" onClick={() => { setRoomCode(room.code); setShowJoinRoom(true); }}>
-                          <div className="flex justify-between items-start mb-2">
-                              <h3 className="font-bold text-gray-900 truncate pr-6">{room.name}</h3>
-                              {user?.id === room.created_by && (
-                                  <button onClick={(e) => { e.stopPropagation(); deleteRoom(room.id); }} className="text-gray-400 hover:text-red-600 p-1 rounded-full hover:bg-red-50 transition-colors">
-                                      <Trash2 className="w-4 h-4"/>
-                                  </button>
-                              )}
+                      <div key={room.id} className="bg-white border border-gray-200 rounded-xl p-4 relative hover:shadow-md">
+                          <h3 className="font-bold text-gray-900 truncate pr-6">{room.name}</h3>
+                          <div className="flex items-center text-xs text-gray-500 mt-2 gap-3">
+                              <span className="flex items-center"><Users className="w-3 h-3 mr-1"/> {room.num_teams} Teams</span>
+                              <span className="flex items-center"><Clock className="w-3 h-3 mr-1"/> {room.time_per_question}s</span>
                           </div>
-                          <div className="flex items-center text-xs text-gray-500 gap-3">
-                              <span className="flex items-center bg-gray-100 px-2 py-1 rounded"><Users className="w-3 h-3 mr-1"/> {room.num_teams} Teams</span>
-                              <span className="flex items-center bg-gray-100 px-2 py-1 rounded"><Clock className="w-3 h-3 mr-1"/> {room.time_per_question}s</span>
-                          </div>
-                          <div className="mt-3 text-center">
-                              <span className="text-primary-600 font-medium text-sm group-hover:underline">Join Now &rarr;</span>
-                          </div>
+                          <button onClick={() => { setRoomCode(room.code); setShowJoinRoom(true); }} className="btn-secondary w-full mt-3 text-sm">Join</button>
+                          {user?.id === room.created_by && <button onClick={(e) => { e.stopPropagation(); deleteRoom(room.id); }} className="absolute top-4 right-4 text-gray-400 hover:text-red-600"><Trash2 className="w-4 h-4"/></button>}
                       </div>
                   ))}
               </div>
