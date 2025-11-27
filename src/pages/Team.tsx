@@ -3,7 +3,7 @@ import { supabase, TeamRoom, RoomParticipant } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 import { 
   Users, Plus, LogIn, Crown, UserCheck, Send, RotateCcw, 
-  Trophy, Loader, Clock, Target, Trash2, Sparkles,
+  Trophy, Loader, Clock, Play, Target, Trash2, Sparkles,
   Check, Square, CheckSquare, Type, Hash, CircleCheck, AlertCircle, BookOpen
 } from 'lucide-react'
 
@@ -33,7 +33,7 @@ interface ExtendedTeamRoom extends TeamRoom {
   } | null;
 }
 
-// --- HELPERS ---
+// --- HELPERS (Defined Top-Level) ---
 
 const formatTime = (seconds: number | undefined | null) => {
   if (!seconds && seconds !== 0) return "0:00";
@@ -70,11 +70,13 @@ export default function Team() {
   const [roomCode, setRoomCode] = useState('')
   
   const [loading, setLoading] = useState(false)
+  
+  // Answer State
   const [selectedAnswer, setSelectedAnswer] = useState<any>(null)
   const [timeRemaining, setTimeRemaining] = useState(0)
   const [timerActive, setTimerActive] = useState(false)
   
-  // Documents
+  // Document Selection State
   const [availableDocuments, setAvailableDocuments] = useState<any[]>([])
   const [selectedDocuments, setSelectedDocuments] = useState<Set<string>>(new Set())
   
@@ -92,33 +94,35 @@ export default function Team() {
   useEffect(() => {
     fetchRooms()
     fetchDocuments()
-    const saved = localStorage.getItem('selectedDocuments')
-    if (saved) setSelectedDocuments(new Set(JSON.parse(saved)))
     
+    // Keep room list fresh
     const roomPoller = setInterval(fetchRooms, 3000);
     return () => clearInterval(roomPoller);
   }, [])
 
-  // Room Subscription
+  // *** CORE SUBSCRIPTION LOGIC ***
   useEffect(() => {
     if (!currentRoom) return
 
-    // Initial Load
+    // 1. Fetch initial participants immediately
     fetchParticipants()
 
     const channel = supabase
       .channel(`room-logic-${currentRoom.id}`)
-      // 1. Watch Participants (Joins/Leaves/Team Changes)
+      
+      // Listener A: Participants (Joins, Leaves, Team Selection)
       .on('postgres_changes', { 
         event: '*', 
         schema: 'public', 
         table: 'room_participants', 
         filter: `room_id=eq.${currentRoom.id}` 
       }, (payload) => {
-          // Immediately re-fetch to ensure consistency
+          console.log('👥 Participants updated:', payload)
+          // Always re-fetch to ensure we have the latest team_numbers
           fetchParticipants()
       })
-      // 2. Watch Game State (Questions/Turn/Score)
+
+      // Listener B: Game State (Questions, Turns, Scores)
       .on('postgres_changes', { 
         event: 'UPDATE', 
         schema: 'public', 
@@ -126,10 +130,11 @@ export default function Team() {
         filter: `id=eq.${currentRoom.id}` 
       }, (payload) => {
           const newRoom = payload.new as ExtendedTeamRoom
+          
           setCurrentRoom(prev => {
               if (!prev) return newRoom;
-              
-              // Handle Timer Resets
+
+              // Handle Timer Resets on Turn Change
               if (newRoom.room_status === 'in_progress') {
                   if (newRoom.current_turn_team_id !== prev.current_turn_team_id || 
                       newRoom.current_question_index !== prev.current_question_index) {
@@ -138,7 +143,7 @@ export default function Team() {
                   }
               }
 
-              // Merge heavy JSON fields
+              // Preserve complex JSON fields if Supabase optimized them out
               return {
                   ...newRoom,
                   team_questions: (newRoom.team_questions && Object.keys(newRoom.team_questions).length > 0) 
@@ -148,10 +153,11 @@ export default function Team() {
               };
           })
       })
-      // 3. Watch Deletion
+      
+      // Listener C: Room Deletion
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'team_rooms', filter: `id=eq.${currentRoom.id}` }, () => {
            alert('Room closed by host.')
-           leaveRoom(true) // Force leave locally
+           leaveRoom(true) 
       })
       .subscribe()
 
@@ -176,8 +182,18 @@ export default function Team() {
     return () => { if (timerRef.current) clearInterval(timerRef.current); }
   }, [currentRoom?.room_status, currentRoom?.current_turn_team_id, currentRoom?.current_question_index])
 
+  // Host Logic: Auto-Advance on Consensus
+  useEffect(() => {
+    if (!currentRoom || !user || currentRoom.room_status !== 'in_progress') return
+    if (currentRoom.created_by === user.id) {
+        if (currentRoom.team_questions && Object.keys(currentRoom.team_questions).length > 0) {
+            checkTeamConsensus()
+        }
+    }
+  }, [currentRoom?.current_answers]) 
 
-  // --- DATA HELPERS ---
+
+  // --- DATA ACTIONS ---
 
   const fetchRooms = async () => {
     const { data } = await supabase
@@ -195,19 +211,24 @@ export default function Team() {
       .select('*')
       .eq('room_id', currentRoom.id)
     
-    if (!error && data) {
-        setParticipants(data)
+    if (error) {
+        console.error('Error fetching participants:', error)
+    } else {
+        // Update state with fresh data from DB
+        setParticipants(data || [])
     }
   }
 
   const fetchDocuments = async () => {
-    const { data } = await supabase
-      .from('documents')
-      .select('id, name, content')
-      .order('created_at', { ascending: false })
-    
-    const valid = (data || []).filter(d => d.content && d.content.length > 50)
-    setAvailableDocuments(valid)
+    try {
+      const { data } = await supabase
+        .from('documents')
+        .select('id, name, content')
+        .order('created_at', { ascending: false })
+      
+      const valid = (data || []).filter(d => d.content && d.content.length > 50)
+      setAvailableDocuments(valid)
+    } catch (e) { console.error(e) }
   }
 
   const toggleDocumentSelection = (docId: string) => {
@@ -217,12 +238,12 @@ export default function Team() {
     setSelectedDocuments(newSelected)
   }
 
-  // --- ROOM ACTIONS ---
+  // --- ROOM OPS ---
 
   const createRoom = async () => {
     if (!roomName.trim() || !user) return
     if (selectedDocuments.size === 0) {
-        alert("Please select at least one document.")
+        alert("Please select at least one document (e.g. Rulebook) to generate questions.")
         return
     }
 
@@ -250,7 +271,7 @@ export default function Team() {
 
       if (error) throw error
 
-      // Host joins as spectator (team_number: null)
+      // Host joins as spectator
       await supabase.from('room_participants').insert({
           room_id: data.id,
           user_id: user.id,
@@ -261,7 +282,7 @@ export default function Team() {
       setCurrentRoom(data as ExtendedTeamRoom)
       setShowCreateRoom(false)
       setRoomName('')
-      // Important: fetch participants immediately to populate state
+      // Fetch immediately to populate the host in the lobby
       await fetchParticipants()
     } catch (error) {
       console.error('Error creating room:', error)
@@ -274,7 +295,6 @@ export default function Team() {
     if (!roomCode.trim() || !user) return
     setLoading(true)
     try {
-      // 1. Find Room
       const { data: room, error: roomError } = await supabase
         .from('team_rooms')
         .select('*')
@@ -284,7 +304,7 @@ export default function Team() {
 
       if (roomError) throw new Error('Room not found')
 
-      // 2. Check existing
+      // Check if already joined
       const { data: existing } = await supabase
         .from('room_participants')
         .select('*')
@@ -292,28 +312,22 @@ export default function Team() {
         .eq('user_id', user.id)
         .maybeSingle()
 
-      // 3. Insert if new
       if (!existing) {
+        // Join as spectator first
         const { error: joinError } = await supabase.from('room_participants').insert({
             room_id: room.id,
             user_id: user.id,
             user_email: user.email || '',
-            team_number: null // Join as spectator
+            team_number: null 
         })
         if (joinError) throw joinError
       }
 
-      // 4. Set State safely
-      // Fetch participants BEFORE setting room to prevent empty UI state
-      const { data: parts } = await supabase
-        .from('room_participants')
-        .select('*')
-        .eq('room_id', room.id)
-        
-      setParticipants(parts || [])
       setCurrentRoom(room as ExtendedTeamRoom)
       setShowJoinRoom(false)
       setRoomCode('')
+      // Force fetch to update UI
+      await fetchParticipants()
 
     } catch (error: any) {
       alert(error.message)
@@ -322,10 +336,24 @@ export default function Team() {
     }
   }
 
+  const deleteRoom = async (roomId: string) => {
+    if (!user) return
+    if (!window.confirm("Are you sure?")) return
+    setLoading(true)
+    try {
+      await supabase.from('team_rooms').delete().eq('id', roomId).eq('created_by', user.id)
+      setRooms(prev => prev.filter(r => r.id !== roomId))
+      if (currentRoom?.id === roomId) {
+        setCurrentRoom(null)
+        setParticipants([])
+      }
+    } catch (error) { console.error(error) } 
+    finally { setLoading(false) }
+  }
+
   const leaveRoom = async (force = false) => {
     if (!currentRoom) return
     
-    // If forced (e.g., room deleted), just clear state
     if (force) {
         setCurrentRoom(null)
         setParticipants([])
@@ -333,10 +361,7 @@ export default function Team() {
     }
 
     if (user) {
-        await supabase.from('room_participants')
-            .delete()
-            .eq('room_id', currentRoom.id)
-            .eq('user_id', user.id)
+        await supabase.from('room_participants').delete().eq('room_id', currentRoom.id).eq('user_id', user.id)
     }
     setCurrentRoom(null)
     setParticipants([])
@@ -344,44 +369,27 @@ export default function Team() {
     setTimerActive(false)
   }
 
-  const deleteRoom = async (roomId: string) => {
-    if (!user) return
-    if (!window.confirm("Are you sure?")) return
-    setLoading(true)
-    try {
-      await supabase.from('team_rooms').delete().eq('id', roomId).eq('created_by', user.id)
-      if (currentRoom?.id === roomId) leaveRoom(true)
-      setRooms(prev => prev.filter(r => r.id !== roomId))
-    } catch (error) { console.error(error) } 
-    finally { setLoading(false) }
-  }
-
-  // --- LOBBY ACTIONS (Fixing Team Selection) ---
+  // --- TEAM SELECTION (FIXED) ---
 
   const handleJoinTeam = async (teamNum: number) => {
       if (!currentRoom || !user) return
       try {
-          // 1. Database Update
-          const { error } = await supabase
+          // 1. Explicit Update with Select to verify
+          const { data, error } = await supabase
             .from('room_participants')
             .update({ team_number: teamNum })
             .eq('room_id', currentRoom.id)
             .eq('user_id', user.id)
-            .select() // Ensure we wait for the commit
+            .select() 
           
           if (error) throw error
 
-          // 2. Manual Fetch to Ensure UI Sync
+          // 2. Force Refetch immediately to update UI state
           await fetchParticipants()
-
-          // 3. Optimistic Update (fallback)
-          setParticipants(prev => 
-              prev.map(p => p.user_id === user.id ? { ...p, team_number: teamNum } : p)
-          )
 
       } catch (error: any) {
           console.error("Error joining team:", error)
-          alert("Failed to join team.")
+          alert("Failed to join team. Please try again.")
       }
   }
 
@@ -390,7 +398,6 @@ export default function Team() {
   const startGame = async () => {
     if (!currentRoom || currentRoom.created_by !== user?.id) return
     
-    // Validate Teams
     const t1Count = participants.filter(p => p.team_number === 1).length
     const t2Count = participants.filter(p => p.team_number === 2).length
     if (t1Count === 0 || t2Count === 0) {
@@ -402,7 +409,7 @@ export default function Team() {
     try {
       const totalQuestions = 2 * currentRoom.questions_per_team
       
-      // Call AI
+      // Generate Quiz via Edge Function
       const { data, error } = await supabase.functions.invoke('generate-quiz', {
         body: { 
           count: totalQuestions,
@@ -411,7 +418,7 @@ export default function Team() {
       })
 
       if (error) throw error
-      if (!data.questions || data.questions.length === 0) throw new Error("AI failed.")
+      if (!data.questions || data.questions.length === 0) throw new Error("AI failed to generate questions.")
 
       const teamQuestions: Record<string, QuizQuestion[]> = {}
       teamQuestions["1"] = data.questions.slice(0, currentRoom.questions_per_team)
@@ -419,7 +426,6 @@ export default function Team() {
       
       const firstQ = { ...teamQuestions["1"][0], owner_team_id: 1 }
 
-      // Update Room to In Progress
       await supabase.from('team_rooms').update({
           room_status: 'in_progress',
           team_questions: teamQuestions,
@@ -454,14 +460,6 @@ export default function Team() {
 
     await supabase.from('team_rooms').update({ current_answers: currentAnswers }).eq('id', currentRoom.id)
   }
-
-  // Host Check
-  useEffect(() => {
-    if (!currentRoom || !user || currentRoom.room_status !== 'in_progress') return
-    if (currentRoom.created_by === user.id) {
-        checkTeamConsensus()
-    }
-  }, [currentRoom?.current_answers]) 
 
   const checkTeamConsensus = async () => {
     if (!currentRoom) return
@@ -511,9 +509,9 @@ export default function Team() {
     } else {
         if (!isStealAttempt) {
             nextTeam = (currentTeam % 2) + 1
-            nextQuestion = currentQ 
+            nextQuestion = currentQ // Steal chance
         } else {
-            nextTeam = currentTeam
+            nextTeam = currentTeam 
             const list = currentRoom.team_questions[nextTeam.toString()] || []
             nextQuestion = list[nextIndex] ? { ...list[nextIndex], owner_team_id: nextTeam } : null
         }
@@ -547,7 +545,7 @@ export default function Team() {
     }
   }
 
-  // --- Render UI Helpers ---
+  // --- RENDER HELPERS ---
 
   const handleMultiChoiceSelect = (idx: number) => {
       const current = (selectedAnswer as number[]) || []
@@ -616,7 +614,6 @@ export default function Team() {
     }
   }
 
-
   // ==================== RENDER VIEWS ====================
 
   // 1. FINISHED
@@ -644,12 +641,8 @@ export default function Team() {
                 })}
               </div>
             </div>
-            
             <div className="card border-blue-200 bg-blue-50">
-                <div className="flex items-center space-x-2 mb-4">
-                    <Sparkles className="w-5 h-5 text-blue-600" />
-                    <h3 className="text-lg font-semibold text-blue-900">AI Analysis</h3>
-                </div>
+                <div className="flex items-center space-x-2 mb-4"><Sparkles className="w-5 h-5 text-blue-600" /><h3 className="text-lg font-semibold text-blue-900">AI Analysis</h3></div>
                 {feedback ? (
                     <div className="space-y-4">
                         {feedback.summary && <p className="text-gray-700">{feedback.summary}</p>}
@@ -701,17 +694,29 @@ export default function Team() {
                           </div>
                       ))}
                    </div>
+                   <div className="card"><h3 className="font-bold mb-4">Consensus</h3>
+                      {participants.filter(p => p.team_number === currentRoom.current_turn_team_id).map(p => (
+                           <div key={p.id} className="flex justify-between p-1 text-sm">
+                               <span>{p.user_email?.split('@')[0]}</span>
+                               {currentRoom.current_answers?.[p.user_id] && <CircleCheck className="w-4 h-4 text-green-500"/>}
+                           </div>
+                      ))}
+                   </div>
               </div>
           </div>
       )
   }
 
-  // 3. LOBBY
+  // 3. LOBBY (Selection Phase)
   if (currentRoom && currentRoom.room_status === 'lobby') {
       const myTeam = participants.find(p => p.user_id === user?.id)?.team_number
-      const spectators = participants.filter(p => p.team_number === null || p.team_number === undefined)
+      
+      // Only show participants that have explicitly joined a team in the team boxes
       const team1 = participants.filter(p => p.team_number === 1)
       const team2 = participants.filter(p => p.team_number === 2)
+      
+      // Show everyone else in the waiting list
+      const spectators = participants.filter(p => p.team_number === null || p.team_number === undefined)
 
       return (
           <div className="max-w-4xl mx-auto px-4">
@@ -724,7 +729,12 @@ export default function Team() {
                   <div className={`card border-t-4 border-t-blue-500 ${myTeam===1?'ring-2 ring-blue-500':''}`}>
                       <h3 className="text-center text-xl font-bold mb-4">Team 1</h3>
                       <div className="space-y-2 mb-4 min-h-[100px]">
-                          {team1.map(p => <div key={p.id} className="p-2 bg-blue-50 rounded text-sm font-medium">{p.user_email}</div>)}
+                          {team1.map(p => (
+                              <div key={p.id} className="flex items-center gap-2 p-2 bg-blue-50 rounded">
+                                  <div className="w-6 h-6 bg-blue-200 rounded-full flex items-center justify-center text-xs text-blue-700 font-bold">{p.user_email?.charAt(0)}</div>
+                                  <span className="text-sm">{p.user_email}</span>
+                              </div>
+                          ))}
                       </div>
                       <button onClick={() => handleJoinTeam(1)} disabled={myTeam === 1} className="btn-primary w-full bg-blue-600 hover:bg-blue-700">Join Team 1</button>
                   </div>
@@ -732,7 +742,12 @@ export default function Team() {
                   <div className={`card border-t-4 border-t-purple-500 ${myTeam===2?'ring-2 ring-purple-500':''}`}>
                       <h3 className="text-center text-xl font-bold mb-4">Team 2</h3>
                       <div className="space-y-2 mb-4 min-h-[100px]">
-                          {team2.map(p => <div key={p.id} className="p-2 bg-purple-50 rounded text-sm font-medium">{p.user_email}</div>)}
+                          {team2.map(p => (
+                              <div key={p.id} className="flex items-center gap-2 p-2 bg-purple-50 rounded">
+                                  <div className="w-6 h-6 bg-purple-200 rounded-full flex items-center justify-center text-xs text-purple-700 font-bold">{p.user_email?.charAt(0)}</div>
+                                  <span className="text-sm">{p.user_email}</span>
+                              </div>
+                          ))}
                       </div>
                       <button onClick={() => handleJoinTeam(2)} disabled={myTeam === 2} className="btn-primary w-full bg-purple-600 hover:bg-purple-700">Join Team 2</button>
                   </div>
@@ -740,7 +755,7 @@ export default function Team() {
 
               {spectators.length > 0 && (
                   <div className="bg-gray-50 p-4 rounded-lg text-center mb-6">
-                      <h4 className="text-xs font-bold text-gray-500 uppercase mb-2">Unassigned Players</h4>
+                      <h4 className="text-xs font-bold text-gray-500 uppercase mb-2">Waiting to Select Team</h4>
                       <div className="flex flex-wrap justify-center gap-2">
                           {spectators.map(p => <span key={p.id} className="px-3 py-1 bg-white border rounded-full text-sm text-gray-600">{p.user_email}</span>)}
                       </div>
@@ -764,6 +779,7 @@ export default function Team() {
     <div className="max-w-2xl mx-auto px-4">
        <h1 className="text-3xl font-bold text-center mb-8">Team Challenge</h1>
        <div className="grid gap-6">
+           {/* Create */}
            <div className="card p-6">
                <div className="flex items-center gap-3 mb-4">
                    <div className="p-2 bg-primary-100 rounded-lg"><Plus className="w-6 h-6 text-primary-600"/></div>
@@ -797,7 +813,8 @@ export default function Team() {
                    </div>
                ) : <button onClick={()=>setShowCreateRoom(true)} className="btn-primary w-full">Create Room</button>}
            </div>
-           
+
+           {/* Join */}
            <div className="card p-6">
                <div className="flex items-center gap-3 mb-4">
                    <div className="p-2 bg-green-100 rounded-lg"><LogIn className="w-6 h-6 text-green-600"/></div>
@@ -814,7 +831,8 @@ export default function Team() {
                ) : <button onClick={()=>setShowJoinRoom(true)} className="btn-secondary w-full">Enter Code</button>}
            </div>
        </div>
-       
+
+       {/* Active Rooms List (Restored) */}
        {rooms.length > 0 && (
           <div className="mt-8">
               <h2 className="text-lg font-bold text-gray-900 mb-4 flex items-center"><Trophy className="w-5 h-5 mr-2 text-yellow-500"/> Active Rooms</h2>
