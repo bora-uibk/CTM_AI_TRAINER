@@ -487,7 +487,9 @@ export default function Team() {
             })
 
         } else {
-            if (nextQuestion) (nextQuestion as GameQuestion).owner_team_id = nextTeam
+            if (nextQuestion && !nextQuestion.owner_team_id) {
+                (nextQuestion as GameQuestion).owner_team_id = originalOwner
+            }
             
             await supabase.from('team_rooms').update({
                 current_turn_team_id: nextTeam,
