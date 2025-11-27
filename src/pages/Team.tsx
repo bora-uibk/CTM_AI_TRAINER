@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { supabase, TeamRoom, RoomParticipant, QuizQuestion } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
-import { Users, Plus, LogIn, Crown, UserCheck, Send, RotateCcw, Trophy, Loader, Clock, Play, Settings, CircleCheck as CheckCircle, Circle as XCircle, Timer, Target, Award, Trash2, Sparkles, CheckSquare, Square, Circle } from 'lucide-react'
+import { Users, Plus, LogIn, Crown, UserCheck, Send, RotateCcw, Trophy, Loader, Clock, Play, Settings, CircleCheck as CheckCircle, Circle as XCircle, Timer, Target, Award, Trash2, Sparkles, CheckSquare, Square } from 'lucide-react'
 
 interface GameQuestion extends QuizQuestion {
   owner_team_id?: number;
@@ -27,7 +27,7 @@ export default function Team() {
   const [roomCode, setRoomCode] = useState('')
   const [loading, setLoading] = useState(false)
   
-  // UPDATED: State can now hold string (input), number (single choice), or array (multi-select)
+  // UPDATED: State to handle single values (string/number) or arrays (multi-select)
   const [selectedAnswer, setSelectedAnswer] = useState<string | number | number[] | null>(null)
   
   const [selectedTeam, setSelectedTeam] = useState<number>(1)
@@ -178,6 +178,7 @@ export default function Team() {
       .subscribe()
 
     return () => { channel.unsubscribe() }
+
   }
 
   const createRoom = async () => {
@@ -228,6 +229,7 @@ export default function Team() {
     } finally {
       setLoading(false)
     }
+
   }
 
   const deleteRoom = async (roomId: string) => {
@@ -257,8 +259,10 @@ export default function Team() {
     } finally {
       setLoading(false)
     }
+
   }
 
+  // --- RESTORED ROBUST JOIN ROOM FUNCTION ---
   const joinRoom = async () => {
     if (!roomCode.trim() || !user) return
 
@@ -318,6 +322,7 @@ export default function Team() {
     } finally {
       setLoading(false)
     }
+
   }
 
   const leaveRoom = async () => {
@@ -337,6 +342,7 @@ export default function Team() {
     } catch (error) {
       console.error('Error leaving room:', error)
     }
+
   }
 
   const startGame = async () => {
@@ -407,6 +413,7 @@ export default function Team() {
     } finally {
       setLoading(false)
     }
+
   }
 
   const submitAnswer = async () => {
@@ -428,8 +435,10 @@ export default function Team() {
     } catch (error) {
       console.error('Error submitting answer:', error)
     }
+
   }
 
+  // --- UPDATED CONSENSUS LOGIC ---
   const checkTeamConsensus = async () => {
     if (!currentRoom) return
 
@@ -444,10 +453,15 @@ export default function Team() {
     if (teamAnswers.length === currentTeamMembers.length && teamAnswers.length > 0) {
         const firstAnswer = teamAnswers[0]?.answer
         
-        // UPDATED: Use JSON.stringify for deep comparison (Arrays/Multi-Select) or direct comparison
-        const allSame = teamAnswers.every(answer => 
-          JSON.stringify(answer.answer) === JSON.stringify(firstAnswer)
-        )
+        // Updated check: Handles Arrays (multi-select) and standard values
+        const allSame = teamAnswers.every(answer => {
+            // If arrays, sort and compare
+            if (Array.isArray(answer.answer) && Array.isArray(firstAnswer)) {
+                return JSON.stringify([...answer.answer].sort()) === JSON.stringify([...firstAnswer].sort());
+            }
+            // Loose equality for numbers vs string inputs
+            return answer.answer == firstAnswer
+        })
 
         if (allSame) {
             console.log('✅ Consensus reached detected by Host')
@@ -456,6 +470,7 @@ export default function Team() {
             }, 1000)
         }
     }
+
   }
 
   // --- CORE GAME LOGIC ---
@@ -481,15 +496,15 @@ export default function Team() {
     try {
         const currentTeam = currentRoom.current_turn_team_id
         
-        // UPDATED: Equality check for Answer correctness including Arrays (Multi-Select)
+        // Updated Verification Logic
         let isCorrect = false;
         if (Array.isArray(teamAnswer) && Array.isArray(currentQ.correct_answer)) {
-             // Sort and compare arrays
-             isCorrect = JSON.stringify([...teamAnswer].sort()) === JSON.stringify([...currentQ.correct_answer].sort());
+            // Compare arrays (sorted)
+            isCorrect = JSON.stringify([...teamAnswer].sort()) === JSON.stringify([...currentQ.correct_answer].sort());
         } else {
-             // Standard comparison for strings (Input) and numbers (Single Choice)
-             // Loose equality for input 12.5 == "12.5"
-             isCorrect = teamAnswer == currentQ.correct_answer
+            // Compare single values (Input/Single Choice)
+            // Loose equality to handle string inputs vs number correct_answers
+            isCorrect = teamAnswer == currentQ.correct_answer
         }
 
         const originalOwner = currentQ.owner_team_id || currentTeam
@@ -602,14 +617,14 @@ export default function Team() {
     return `${mins}:${secs.toString().padStart(2, '0')}`
   }
 
-  // UPDATED: Logic to handle toggle of multi-select options
+  // --- HELPER: Multi-select Toggle ---
   const toggleMultiSelect = (index: number) => {
     if (hasAnswered || !isUserTurn) return;
     
     const current = (Array.isArray(selectedAnswer) ? selectedAnswer : []) as number[];
     const newSelection = current.includes(index)
         ? current.filter(i => i !== index)
-        : [...current, index].sort((a, b) => a - b); // Keep sorted for consistency
+        : [...current, index].sort((a, b) => a - b);
         
     setSelectedAnswer(newSelection);
   }
@@ -627,8 +642,13 @@ export default function Team() {
   const currentTeamMembers = participants.filter(p => p.team_number === currentRoom?.current_turn_team_id)
   const teamAnswers = currentTeamMembers.map(m => currentAnswers[m.user_id]).filter(a => a !== undefined)
   
-  // UPDATED: Consensus check for rendering (supports Array comparison via JSON.stringify)
-  const hasConsensus = teamAnswers.length === currentTeamMembers.length && teamAnswers.every(a => JSON.stringify(a.answer) === JSON.stringify(teamAnswers[0]?.answer))
+  // Updated Consensus check for visual UI
+  const hasConsensus = teamAnswers.length === currentTeamMembers.length && teamAnswers.every(a => {
+      if (Array.isArray(a.answer) && Array.isArray(teamAnswers[0]?.answer)) {
+          return JSON.stringify(a.answer) === JSON.stringify(teamAnswers[0]?.answer);
+      }
+      return a.answer == teamAnswers[0]?.answer
+  })
 
   // --- VIEW: GAME FINISHED ---
   if (currentRoom?.room_status === 'finished') {
@@ -790,7 +810,7 @@ export default function Team() {
                       </div>
                     )}
 
-                    {/* --- TYPE 2: MULTI-SELECT (Checkbox) --- */}
+                    {/* --- TYPE 2: MULTI-SELECT (Checkboxes) --- */}
                     {currentQuestion.type === 'multi_select' && currentQuestion.options && (
                        <div className="space-y-3">
                         <p className="text-sm text-gray-500 italic mb-2">Select all that apply:</p>
@@ -805,7 +825,6 @@ export default function Team() {
                                         <span>{option}</span>
                                     </div>
                                     <div className="flex space-x-1">
-                                        {/* Show dots if a teammate has this specific option in their array */}
                                         {teamAnswers.filter(a => Array.isArray(a.answer) && a.answer.includes(index)).map((_, i) => <div key={i} className="w-2 h-2 bg-primary-500 rounded-full" />)}
                                     </div>
                                 </div>
@@ -815,20 +834,19 @@ export default function Team() {
                        </div>
                     )}
 
-                    {/* --- TYPE 3: INPUT / NUMERICAL --- */}
+                    {/* --- TYPE 3: NUMERICAL / INPUT --- */}
                     {currentQuestion.type === 'numerical' && (
                         <div className="space-y-4">
-                            <p className="text-sm text-gray-500 italic">Enter your calculation result:</p>
+                            <label className="block text-sm font-medium text-gray-700">Enter your calculated answer:</label>
                             <input 
                                 type="number" 
                                 step="any"
                                 value={selectedAnswer?.toString() || ''}
                                 onChange={(e) => setSelectedAnswer(e.target.value)}
                                 disabled={!isUserTurn || hasAnswered}
-                                className="input-field text-lg font-mono"
-                                placeholder="0.00"
+                                className="w-full p-3 border border-gray-300 rounded-lg text-lg font-mono focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                                placeholder="e.g. 12.34"
                             />
-                            {/* Visual aid for teammate answers in Input mode */}
                             {teamAnswers.length > 0 && (
                                 <div className="mt-2 p-2 bg-gray-50 rounded text-sm text-gray-600">
                                     <span className="font-semibold">Teammate answers:</span> 
