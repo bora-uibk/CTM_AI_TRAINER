@@ -1,177 +1,228 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { GoogleGenerativeAI } from 'npm:@google/generative-ai@0.24.1';
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type'
 };
-serve(async (req)=>{
-  // Handle CORS
+
+serve(async (req) => {
   if (req.method === 'OPTIONS') {
-    return new Response('ok', {
-      headers: corsHeaders
-    });
+    return new Response('ok', { headers: corsHeaders });
   }
+
   try {
-    // 1. Parse the input
     const payload = await req.json();
-    console.log("📝 Feedback Request Mode:", payload.mode || "team (legacy)");
+    // Default missing mode to "team" for backward compatibility
+    const mode = payload.mode?.toLowerCase() || "team";
+    console.log("📝 Feedback Request Mode:", mode);
+
     let result;
-    // 2. Branch Logic based on Mode
-    if (payload.mode === 'individual') {
-      // --- NEW INDIVIDUAL LOGIC ---
-      if (!payload.questions || payload.score === undefined) {
-        throw new Error('Questions and Score are required for individual mode');
+
+    // ===========================
+    // Individual Mode
+    // ===========================
+    if (mode === 'individual') {
+      if (!payload.questions || !payload.answers || payload.score === undefined) {
+        throw new Error("Questions, Answers, and Score are required for individual mode");
       }
-      result = await generateIndividualFeedback(payload.questions, payload.answers, payload.score, payload.totalQuestions);
-    } else {
-      // --- EXISTING TEAM LOGIC (Preserved) ---
-      // Fallback for existing team challenge calls that send { scores, questions }
+      result = await generateIndividualFeedback(
+        payload.questions,
+        payload.answers,
+        payload.score,
+        payload.totalQuestions
+      );
+    }
+
+    // ===========================
+    // Team Mode
+    // ===========================
+    else if (mode === 'team') {
       const scores = payload.scores;
       const questions = payload.questions;
+
       if (!scores || !questions) {
-        throw new Error('Scores and Questions are required for team analysis');
+        throw new Error("Scores and Questions are required for team mode");
       }
+
       result = await generateGameFeedback(scores, questions);
     }
-    // 3. Return as JSON
+
+    // ===========================
+    // Invalid Mode
+    // ===========================
+    else {
+      throw new Error(`Invalid mode '${mode}'. Must be 'team' or 'individual'`);
+    }
+
     return new Response(JSON.stringify(result), {
-      headers: {
-        ...corsHeaders,
-        'Content-Type': 'application/json'
-      },
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       status: 200
     });
+
   } catch (error) {
-    console.error('Feedback generation error:', error);
-    // Fallback Response
+    console.error("❌ Feedback generation error:", error);
+
+    // Fallback response
     return new Response(JSON.stringify({
       summary: "Feedback unavailable.",
-      strengths: [
-        "Quiz Completed"
-      ],
+      strengths: ["Quiz Completed"],
       weak_points: [],
       detailed_analysis: "Unable to generate AI analysis at this time. Please review your score above.",
-      feedback: "Unable to generate AI analysis at this time." // Fallback for simple UI
+      feedback: "Unable to generate AI analysis at this time."
     }), {
-      headers: {
-        ...corsHeaders,
-        'Content-Type': 'application/json'
-      },
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       status: 200
     });
   }
 });
-// ==========================================
-// 1. NEW: INDIVIDUAL QUIZ FEEDBACK
-// ==========================================
+
+
+// ===========================================
+// Individual Quiz Feedback
+// ===========================================
 async function generateIndividualFeedback(questions, userAnswers, score, total) {
-  const apiKey = Deno.env.get('GEMINI_API_KEY');
-  if (!apiKey) throw new Error('Gemini API key not configured');
+  const apiKey = Deno.env.get("GEMINI_API_KEY");
+  if (!apiKey) throw new Error("Gemini API key not configured");
+
   const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({
-    model: 'gemini-flash-latest',
-    generationConfig: {
-      responseMimeType: "application/json"
-    }
-  });
-  // Prepare data summary for AI
-  const percentage = Math.round(score / total * 100);
-  // Map questions to topics/concepts
-  const questionSummary = questions.map((q, index)=>{
+  const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
+
+  const percentage = Math.round((score / total) * 100);
+
+  const questionSummary = questions.map((q, index) => {
     const userAnswer = userAnswers[index];
-    // Determine correctness based on type
     let isCorrect = false;
-    if (q.type === 'single_choice') isCorrect = Number(userAnswer) === Number(q.correct_answer);
-    else if (q.type === 'multi_choice') isCorrect = JSON.stringify(Array.isArray(userAnswer) ? userAnswer.sort() : []) === JSON.stringify(Array.isArray(q.correct_answer) ? q.correct_answer.sort() : []);
-    else if (q.type === 'input') isCorrect = String(userAnswer).trim().toLowerCase() === String(q.correct_answer).trim().toLowerCase();
+
+    if (q.type === "single_choice") {
+      isCorrect = Number(userAnswer) === Number(q.correct_answer);
+    } else if (q.type === "multi_choice") {
+      const a = (Array.isArray(userAnswer) ? userAnswer : []).map(String).sort();
+      const b = (Array.isArray(q.correct_answer) ? q.correct_answer : []).map(String).sort();
+      isCorrect = JSON.stringify(a) === JSON.stringify(b);
+    } else if (q.type === "input") {
+      isCorrect = String(userAnswer).trim().toLowerCase() === String(q.correct_answer).trim().toLowerCase();
+    }
+
     return {
-      question: q.question.substring(0, 50) + "...",
+      question: q.question.slice(0, 80) + "...",
       topic: detectTopic(q.question),
       correct: isCorrect
     };
   });
+
   const prompt = `
-      Analyze this individual Formula Student engineering quiz performance.
-      
-      STATS:
-      - Score: ${score} / ${total} (${percentage}%)
-      - Performance Data: ${JSON.stringify(questionSummary)}
+Analyze this individual Formula Student engineering quiz performance.
 
-      TASK:
-      Act as a Formula Student Faculty Advisor. Provide a brief, encouraging, but technical critique.
-      Identify which topics they know well vs what they need to study (Rulebook, Engineering Calculation, etc.).
+STATS:
+- Score: ${score} / ${total} (${percentage}%)
+- Performance Data: ${JSON.stringify(questionSummary)}
 
-      OUTPUT FORMAT (Strict JSON):
-      {
-        "summary": "One sentence summary of the performance.",
-        "strengths": ["Short bullet point 1", "Short bullet point 2"],
-        "weak_points": ["Short bullet point 1", "Short bullet point 2"],
-        "feedback": "A short paragraph (approx 3 sentences) giving specific advice based on the missed questions.",
-        "detailed_analysis": "Same as feedback" 
-      }
-    `;
-  const result = await model.generateContent(prompt);
-  return JSON.parse(result.response.text());
+TASK:
+Act as a Formula Student Faculty Advisor. Provide brief, encouraging, technical feedback.
+Identify topics they know well vs. what they need to study.
+
+OUTPUT FORMAT (Strict JSON):
+{
+  "summary": "One sentence summary of the performance.",
+  "strengths": [],
+  "weak_points": [],
+  "feedback": "A short paragraph (approx 3 sentences) with advice.",
+  "detailed_analysis": "Same as feedback"
 }
-// ==========================================
-// 2. EXISTING: TEAM GAME FEEDBACK
-// ==========================================
+`;
+
+  const raw = await model.generateContent({
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    generationConfig: { responseMimeType: "application/json" }
+  });
+
+  return safeJson(raw.response.text());
+}
+
+
+// ===========================================
+// Team Game Feedback
+// ===========================================
 async function generateGameFeedback(scores, questions) {
-  const apiKey = Deno.env.get('GEMINI_API_KEY');
-  if (!apiKey) throw new Error('Gemini API key not configured');
+  const apiKey = Deno.env.get("GEMINI_API_KEY");
+  if (!apiKey) throw new Error("Gemini API key not configured");
+
   const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({
-    model: 'gemini-flash-latest',
-    generationConfig: {
-      responseMimeType: "application/json"
-    }
-  });
-  const team1Score = scores['1'] || 0;
-  const team2Score = scores['2'] || 0;
-  // Extract Topics
+  const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
+
+  const team1Score = scores["1"] ?? 0;
+  const team2Score = scores["2"] ?? 0;
+
   const allQuestions = [
-    ...questions['1'] || [],
-    ...questions['2'] || []
+    ...(questions["1"] ?? []),
+    ...(questions["2"] ?? [])
   ];
-  const topicSet = new Set();
-  allQuestions.forEach((q)=>{
-    topicSet.add(detectTopic(q.question));
-  });
-  const topics = Array.from(topicSet).join(', ');
+
+  const topics = Array.from(new Set(allQuestions.map(q => detectTopic(q.question)))).join(", ");
+
   const prompt = `
-    Analyze this Formula Student quiz match between two teams.
-    
-    DATA:
-    - Team 1 Score: ${team1Score} points
-    - Team 2 Score: ${team2Score} points
-    - Topics Covered: ${topics}
-    - Total Questions: ${allQuestions.length}
+Analyze this Formula Student quiz match between two teams.
 
-    TASK:
-    Act as a Formula Student Judge giving a post-game debrief. 
-    Compare the performance. If scores are low, assume the questions were difficult rules questions. 
-    If scores are high, commend their rulebook knowledge.
+DATA:
+- Team 1 Score: ${team1Score} points
+- Team 2 Score: ${team2Score} points
+- Topics Covered: ${topics}
+- Total Questions: ${allQuestions.length}
 
-    OUTPUT FORMAT (Strict JSON):
-    {
-      "summary": "A 2-sentence overview of who won and the general difficulty level.",
-      "strengths": ["Short bullet point 1", "Short bullet point 2"],
-      "weak_points": ["Short bullet point 1", "Short bullet point 2"],
-      "detailed_analysis": "A paragraph offering advice on the topics mentioned above."
-    }
-  `;
-  const result = await model.generateContent(prompt);
-  return JSON.parse(result.response.text());
+TASK:
+Act as a Formula Student Judge giving a post-game debrief.
+Compare performance, comment on difficulty, and provide advice.
+
+OUTPUT FORMAT (Strict JSON):
+{
+  "summary": "A 2-sentence overview of who won and difficulty level.",
+  "strengths": [],
+  "weak_points": [],
+  "detailed_analysis": "A paragraph offering advice on the topics."
 }
-// Helper to tag topics (Shared between both modes)
+`;
+
+  const raw = await model.generateContent({
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    generationConfig: { responseMimeType: "application/json" }
+  });
+
+  return safeJson(raw.response.text());
+}
+
+
+// ===========================================
+// Safe JSON Parsing Helper
+// ===========================================
+function safeJson(text) {
+  try {
+    text = text.replace(/```json|```/g, "").trim();
+    return JSON.parse(text);
+  } catch (e) {
+    console.error("⚠️ Failed to parse JSON, returning fallback:", text);
+    return {
+      summary: "AI feedback unavailable.",
+      strengths: [],
+      weak_points: [],
+      detailed_analysis: "",
+      feedback: ""
+    };
+  }
+}
+
+
+// ===========================================
+// Topic Detection Helper
+// ===========================================
 function detectTopic(questionText) {
   const text = questionText.toLowerCase();
-  if (text.includes('brake') || text.includes('stopping')) return 'Braking';
-  if (text.includes('engine') || text.includes('intake') || text.includes('fuel') || text.includes('motor') || text.includes('power')) return 'Powertrain';
-  if (text.includes('chassis') || text.includes('frame') || text.includes('tube') || text.includes('hoop')) return 'Chassis/Structural';
-  if (text.includes('suspension') || text.includes('tire') || text.includes('wheel') || text.includes('spring') || text.includes('damper')) return 'Suspension/VD';
-  if (text.includes('electrical') || text.includes('battery') || text.includes('voltage') || text.includes('accumulator') || text.includes('tsal') || text.includes('bspd')) return 'EV/Electronics';
-  if (text.includes('aero') || text.includes('wing') || text.includes('drag') || text.includes('downforce')) return 'Aerodynamics';
-  if (text.includes('cost') || text.includes('business') || text.includes('presentation')) return 'Static Events';
-  return 'General Rules';
+  if (text.includes("brake") || text.includes("stopping")) return "Braking";
+  if (text.includes("engine") || text.includes("fuel") || text.includes("power")) return "Powertrain";
+  if (text.includes("chassis") || text.includes("frame")) return "Chassis/Structural";
+  if (text.includes("suspension") || text.includes("tire") || text.includes("damper")) return "Suspension/VD";
+  if (text.includes("battery") || text.includes("voltage") || text.includes("accumulator")) return "EV/Electronics";
+  if (text.includes("aero") || text.includes("wing") || text.includes("drag")) return "Aerodynamics";
+  if (text.includes("cost") || text.includes("presentation")) return "Static Events";
+  return "General Rules";
 }
