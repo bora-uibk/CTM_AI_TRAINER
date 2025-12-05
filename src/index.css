@@ -170,3 +170,22 @@
     min-height: 44px;
   }
 }
+
+/* Prevent body scroll when mobile menu is open */
+.mobile-menu-open {
+  overflow: hidden;
+}
+
+/* Smooth transitions for sidebar */
+.sidebar-transition {
+  transition: transform 0.3s ease-in-out;
+}
+
+/* Ensure proper z-index stacking */
+.mobile-overlay {
+  z-index: 20;
+}
+
+.mobile-sidebar {
+  z-index: 30;
+}

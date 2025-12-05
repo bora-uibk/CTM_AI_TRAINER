@@ -7,7 +7,9 @@ import {
   Users, 
   LogOut, 
   FileText,
-  Trophy
+  Trophy,
+  Menu,
+  X
 } from 'lucide-react'
 
 interface LayoutProps {
@@ -18,6 +20,7 @@ interface LayoutProps {
 
 export default function Layout({ children, currentPage, onPageChange }: LayoutProps) {
   const { user, signOut } = useAuth()
+  const [sidebarOpen, setSidebarOpen] = React.useState(false)
 
   const navigation = [
     { id: 'documents', name: 'Documents', icon: FileText },
@@ -26,6 +29,17 @@ export default function Layout({ children, currentPage, onPageChange }: LayoutPr
     { id: 'team', name: 'Team Challenge', icon: Users },
   ]
 
+  const toggleSidebar = () => {
+    setSidebarOpen(!sidebarOpen)
+  }
+
+  const handleNavigation = (page: string) => {
+    onPageChange(page)
+    // Close sidebar on mobile after navigation
+    if (window.innerWidth < 768) {
+      setSidebarOpen(false)
+    }
+  }
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
       {/* Header */}
@@ -33,6 +47,19 @@ export default function Layout({ children, currentPage, onPageChange }: LayoutPr
         <div className="max-w-7xl mx-auto px-3 sm:px-4 lg:px-8">
           <div className="flex justify-between items-center h-16">
             <div className="flex items-center space-x-3">
+              {/* Mobile menu button */}
+              <button
+                onClick={toggleSidebar}
+                className="md:hidden p-2 rounded-lg text-gray-600 hover:text-gray-900 hover:bg-gray-100 transition-colors"
+                aria-label="Toggle navigation"
+              >
+                {sidebarOpen ? (
+                  <X className="w-5 h-5" />
+                ) : (
+                  <Menu className="w-5 h-5" />
+                )}
+              </button>
+              
               <div className="flex items-center justify-center w-8 h-8 sm:w-10 sm:h-10 bg-primary-600 rounded-lg">
                 <Trophy className="w-4 h-4 sm:w-6 sm:h-6 text-white" />
               </div>
@@ -62,23 +89,47 @@ export default function Layout({ children, currentPage, onPageChange }: LayoutPr
       </header>
 
       <div className="flex flex-1 overflow-hidden">
+        {/* Mobile overlay */}
+        {sidebarOpen && (
+          <div 
+            className="fixed inset-0 bg-black bg-opacity-50 z-20 md:hidden"
+            onClick={() => setSidebarOpen(false)}
+          />
+        )}
+
         {/* Sidebar */}
-        <nav className="w-16 sm:w-64 bg-white shadow-sm border-r border-gray-200 flex-shrink-0">
+        <nav className={`
+          fixed md:relative inset-y-0 left-0 z-30 
+          w-64 bg-white shadow-sm border-r border-gray-200 
+          transform transition-transform duration-300 ease-in-out
+          md:translate-x-0 md:w-16 lg:w-64
+          ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}
+        `}>
           <div className="p-2 sm:p-4 h-full">
+            {/* Mobile close button */}
+            <div className="flex justify-end mb-4 md:hidden">
+              <button
+                onClick={() => setSidebarOpen(false)}
+                className="p-2 rounded-lg text-gray-600 hover:text-gray-900 hover:bg-gray-100"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
             <div className="space-y-2">
               {navigation.map((item) => {
                 const Icon = item.icon
                 return (
                   <button
                     key={item.id}
-                    onClick={() => onPageChange(item.id)}
-                    className={`nav-link w-full text-left justify-center sm:justify-start ${
+                    onClick={() => handleNavigation(item.id)}
+                    className={`nav-link w-full text-left justify-center md:justify-center lg:justify-start ${
                       currentPage === item.id ? 'active' : ''
                     }`}
                     title={item.name}
                   >
                     <Icon className="w-4 h-4 sm:w-5 sm:h-5" />
-                    <span className="hidden sm:inline">{item.name}</span>
+                    <span className="md:hidden lg:inline">{item.name}</span>
                   </button>
                 )
               })}
@@ -87,7 +138,7 @@ export default function Layout({ children, currentPage, onPageChange }: LayoutPr
         </nav>
 
         {/* Main Content */}
-        <main className="flex-1 overflow-auto">
+        <main className="flex-1 overflow-auto md:ml-0">
           <div className="p-3 sm:p-4 lg:p-6 max-w-7xl mx-auto w-full">
             {children}
           </div>
