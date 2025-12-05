@@ -1,304 +1,245 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { GoogleGenerativeAI } from 'npm:@google/generative-ai@0.24.1';
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type'
 };
-serve(async (req)=>{
+
+serve(async (req) => {
   if (req.method === 'OPTIONS') {
-    return new Response('ok', {
-      headers: corsHeaders
-    });
+    return new Response('ok', { headers: corsHeaders });
   }
+
   try {
     console.log('🎯 Quiz generation started');
-    const supabaseClient = createClient(Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '');
+    const supabaseClient = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+    );
+
     const { count = 5, selectedDocuments } = await req.json();
+    
     console.log('📊 Requested question count:', count);
     console.log('📋 Selected documents:', selectedDocuments?.length || 0);
-    
+
     // Get documents for context
     console.log('📚 Fetching documents...');
-    
     let documents;
     let docError;
-    
+
     if (selectedDocuments && selectedDocuments.length > 0) {
-      // Use only selected documents
       const { data: selectedDocs, error: selectedError } = await supabaseClient
         .from('documents')
         .select('content, name')
         .in('id', selectedDocuments);
-      
       documents = selectedDocs;
       docError = selectedError;
-      console.log('📄 Using selected documents');
     } else {
-      // Use all documents
       const { data: allDocs, error: allError } = await supabaseClient
         .from('documents')
         .select('content, name')
         .limit(10);
-      
       documents = allDocs;
       docError = allError;
-      console.log('📄 Using all available documents');
     }
-    
+
     if (docError) {
       console.error('❌ Error fetching documents:', docError);
       return getFallbackQuestions(count);
     }
-    console.log('📄 Documents fetched:', documents?.length || 0);
-    // Filter out documents with placeholder content
-    const validDocs = documents?.filter((doc)=>doc.content && doc.content.trim().length > 100 && !doc.content.startsWith('[PDF Document:')) || [];
-    console.log('✅ Valid documents:', validDocs.length);
-    if (validDocs.length > 0) {
-      console.log('📋 Document names:', validDocs.map((d)=>d.name).join(', '));
-    }
+
+    // Filter out invalid docs
+    const validDocs = documents?.filter(doc => 
+      doc.content && 
+      doc.content.trim().length > 50
+    ) || [];
+
     if (validDocs.length === 0) {
-      console.log('⚠️ No valid documents found, returning fallback questions');
       return getFallbackQuestions(count);
     }
-    // Combine context with reasonable size limit
-    const context = validDocs.map((doc)=>doc.content).join('\n\n').substring(0, 15000);
-    console.log('📝 Context length:', context.length);
-    console.log('🔤 Context preview:', context.substring(0, 200));
-    // Check if Gemini API key exists
+
+    // Combine context. Increased limit to 150k chars to accommodate Rulebooks + Quiz History
+    // Gemini Flash has a large context window, so we can pass more data.
+    const context = validDocs.map(doc => 
+      `--- DOCUMENT: ${doc.name} ---\n${doc.content}`
+    ).join('\n\n').substring(0, 150000); 
+
     const apiKey = Deno.env.get('GEMINI_API_KEY');
     if (!apiKey) {
-      console.error('❌ GEMINI_API_KEY not found in environment');
       return getFallbackQuestions(count);
     }
-    console.log('🔑 Gemini API key found');
-    // Generate questions using Gemini
-    console.log('🤖 Generating questions with Gemini...');
+
     try {
       const questions = await generateQuestionsWithGemini(context, count);
-      console.log('✅ Questions generated:', questions.length);
-      // If we got fewer questions than requested, that's okay
-      if (questions.length < count) {
-        console.log(`⚠️ Generated ${questions.length} out of ${count} requested`);
-      }
       return new Response(JSON.stringify({
         questions,
         source: 'gemini',
-        contextUsed: context.length,
         requested: count,
         generated: questions.length
       }), {
-        headers: {
-          ...corsHeaders,
-          'Content-Type': 'application/json'
-        },
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         status: 200
       });
     } catch (geminiError) {
       console.error('❌ Gemini generation failed:', geminiError.message);
       return getFallbackQuestions(count);
     }
+
   } catch (error) {
-    console.error('❌ Quiz generation error:', error);
-    console.error('Error details:', error.message);
+    console.error('❌ Quiz generation error:', error.message);
     return getFallbackQuestions(5);
   }
 });
+
 async function generateQuestionsWithGemini(context, count) {
+  const apiKey = Deno.env.get('GEMINI_API_KEY');
+  const genAI = new GoogleGenerativeAI(apiKey);
+  
+  // Use 1.5 Flash for larger context window and faster speed
+  const model = genAI.getGenerativeModel({
+    model: 'gemini-flash-latest', 
+    generationConfig: {
+      temperature: 0.5, // Lower temperature for more accurate rule-based questions
+      topK: 40,
+      topP: 0.95,
+      maxOutputTokens: 8000,
+      responseMimeType: "application/json"
+    }
+  });
+
+  const prompt = `You are an expert engineering exam creator for Formula Student competitions.
+    Generate exactly ${count} questions based ONLY on the provided documents.
+    
+    INPUT CONTEXT:
+    ${context}
+
+    INSTRUCTIONS:
+    1. Analyze the documents. If a "Rulebook" is provided, prioritize it for factual rules. If "Accounting/Cost" docs are provided, create calculation or logic questions based on them. If "Past Quizzes" are provided, use them to understand the *difficulty* and *style* but do not copy them word-for-word unless they are relevant rules.
+    2. Create questions in the following specific styles found in Formula Student competitions:
+       
+       - TYPE A: "single_choice" (Standard multiple choice. One correct answer).
+         * Focus on Rule compliance, specific dimensions, materials, or definitions.
+       
+       - TYPE B: "multi_choice" (Select ALL that apply).
+         * Focus on complex rules where multiple conditions must be met (e.g., "Which statements are TRUE regarding scrutineering?").
+       
+       - TYPE C: "input" (Numerical Calculation or Specific Value).
+         * Create engineering scenarios (e.g., Calculate stress, voltage, skidpad scoring, efficiency scores).
+         * Provide variables and ask for a specific number.
+         * IMPORTANT: For 'input' types, the "options" array should be empty [], and "correct_answer" should be the string representation of the calculated number (e.g., "12.34").
+
+    3. DIFFICULTY: Mix between Medium and Hard. Avoid trivial questions.
+    4. OUTPUT FORMAT: Return a raw JSON Array.
+
+    JSON SCHEMA:
+    [
+      {
+        "type": "single_choice" | "multi_choice" | "input",
+        "question": "The question text. If it's a calculation, include units required.",
+        "options": ["Option A", "Option B", "Option C", "Option D"], // Empty [] for 'input' type
+        "correct_answer": 0, // For single_choice: Index of the answer (0-3). 
+                             // For multi_choice: Array of indices [0, 2]. 
+                             // For input: The string value answer "125.5".
+        "explanation": "Detailed derivation or rule reference (e.g., 'According to T.1.2...').",
+        "difficulty": "hard"
+      }
+    ]
+  `;
+
+  console.log(`📤 Sending prompt to Gemini...`);
+  const result = await model.generateContent(prompt);
+  const responseText = result.response.text();
+
+  // Clean and Parse JSON
+  let cleanedResponse = responseText.replace(/```json/g, '').replace(/```/g, '').trim();
+  
   try {
-    const apiKey = Deno.env.get('GEMINI_API_KEY');
-    if (!apiKey) {
-      throw new Error('GEMINI_API_KEY not configured');
-    }
-    console.log('🔧 Initializing Gemini...');
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({
-      model: 'gemini-2.5-flash',
-      generationConfig: {
-        temperature: 0.7,
-        topK: 40,
-        topP: 0.95,
-        maxOutputTokens: 8000
+    let questions = JSON.parse(cleanedResponse);
+    
+    if (!Array.isArray(questions)) throw new Error("Response is not an array");
+
+    // Normalize and Validate
+    return questions.map((q, index) => {
+      let safeType = q.type;
+      let safeAnswer = q.correct_answer;
+
+      // Normalize Types
+      if (!['single_choice', 'multi_choice', 'input'].includes(safeType)) {
+        safeType = 'single_choice';
       }
-    });
-    const prompt = `Generate exactly ${count} Formula Student quiz questions in valid JSON format.
 
-CONTEXT:
-${context.substring(0, 10000)}
-
-CRITICAL: Return ONLY a JSON array. No markdown, no explanations, just the array.
-
-Format:
-[
-  {
-    "type": "multiple_choice",
-    "question": "Question?",
-    "options": ["A", "B", "C", "D"],
-    "correct_answer": 0,
-    "explanation": "Explanation",
-    "difficulty": "medium"
-  }
-]
-
-Requirements:
-- Exactly ${count} questions
-- Each question must be complete and valid
-- Mix of multiple_choice and true_false types
-- Base questions on the Formula Student rules context
-- Return ONLY the JSON array`;
-    console.log('📤 Sending prompt for', count, 'questions...');
-    const result = await model.generateContent(prompt);
-    const response = result.response.text();
-    console.log('📥 Response length:', response.length);
-    console.log('📝 Response preview:', response.substring(0, 500));
-    // Extract and fix JSON
-    let cleanedResponse = response.replace(/```json/g, '').replace(/```/g, '').trim();
-    // Find JSON array boundaries
-    const startIndex = cleanedResponse.indexOf('[');
-    const endIndex = cleanedResponse.lastIndexOf(']');
-    if (startIndex === -1 || endIndex === -1) {
-      console.error('❌ No array brackets found');
-      throw new Error('No JSON array in response');
-    }
-    cleanedResponse = cleanedResponse.substring(startIndex, endIndex + 1);
-    // Fix common JSON issues
-    cleanedResponse = fixCommonJsonIssues(cleanedResponse);
-    console.log('🧹 Cleaned JSON length:', cleanedResponse.length);
-    // Try parsing
-    let questions;
-    try {
-      questions = JSON.parse(cleanedResponse);
-      console.log('✅ Parsed successfully:', questions.length, 'questions');
-    } catch (parseError) {
-      console.error('❌ Parse error:', parseError.message);
-      // Try to salvage partial results
-      questions = tryPartialParse(cleanedResponse);
-      if (!questions || questions.length === 0) {
-        console.error('Failed JSON preview:', cleanedResponse.substring(0, 500));
-        throw new Error(`JSON parse failed: ${parseError.message}`);
+      // Normalize Answers based on type
+      if (safeType === 'input') {
+        // Ensure options is empty for input
+        q.options = []; 
+        // Ensure answer is a string
+        safeAnswer = String(safeAnswer); 
+      } 
+      else if (safeType === 'multi_choice') {
+        // Ensure answer is an array of numbers
+        if (!Array.isArray(safeAnswer)) {
+           safeAnswer = [Number(safeAnswer) || 0];
+        }
+      } 
+      else {
+        // Single choice defaults
+        safeAnswer = Number(safeAnswer);
+        if (isNaN(safeAnswer)) safeAnswer = 0;
       }
-      console.log('⚠️ Partial parse successful:', questions.length, 'questions');
-    }
-    if (!Array.isArray(questions)) {
-      throw new Error('Response is not an array');
-    }
-    if (questions.length === 0) {
-      throw new Error('No questions in array');
-    }
-    console.log('✅ Final question count:', questions.length);
-    // Validate and normalize
-    const validQuestions = questions.filter((q)=>q.question && q.type) // Filter out invalid entries
-    .map((q, index)=>{
-      let correctAnswer = q.correct_answer;
-      if (q.type === 'true_false') {
-        correctAnswer = correctAnswer === true || correctAnswer === 'true' || correctAnswer === 1;
-      } else if (q.type === 'multiple_choice') {
-        correctAnswer = typeof correctAnswer === 'number' ? correctAnswer : parseInt(correctAnswer) || 0;
-      }
+
       return {
-        id: (index + 1).toString(),
-        type: q.type,
+        id: Date.now() + index.toString(),
+        type: safeType,
         question: q.question,
         options: q.options || [],
-        correct_answer: correctAnswer,
-        explanation: q.explanation || 'Refer to Formula Student rules',
+        correct_answer: safeAnswer,
+        explanation: q.explanation || 'Based on the provided documents.',
         difficulty: q.difficulty || 'medium'
       };
     });
-    if (validQuestions.length === 0) {
-      throw new Error('No valid questions after filtering');
-    }
-    console.log('✅ Valid questions:', validQuestions.length);
-    return validQuestions;
+
   } catch (error) {
-    console.error('❌ Error:', error.message);
+    console.error('❌ JSON Parse Error:', error);
+    console.log('Raw Output:', responseText);
     throw error;
   }
 }
-// Fix common JSON formatting issues
-function fixCommonJsonIssues(jsonStr) {
-  return jsonStr// Remove trailing commas before ] or }
-  .replace(/,(\s*[}\]])/g, '$1')// Remove any null bytes or control characters
-  .replace(/[\x00-\x1F\x7F]/g, '');
-}
-// Try to parse partial JSON if full parse fails
-function tryPartialParse(jsonStr) {
-  try {
-    // Try to find complete question objects
-    const questionMatches = jsonStr.match(/\{[^{}]*"type"[^{}]*"question"[^{}]*\}/g);
-    if (!questionMatches || questionMatches.length === 0) {
-      return null;
-    }
-    console.log('🔧 Found', questionMatches.length, 'potential question objects');
-    const questions = [];
-    for (const match of questionMatches){
-      try {
-        const q = JSON.parse(match);
-        if (q.type && q.question) {
-          questions.push(q);
-        }
-      } catch (e) {
-        continue;
-      }
-    }
-    return questions.length > 0 ? questions : null;
-  } catch (error) {
-    console.error('Partial parse failed:', error.message);
-    return null;
-  }
-}
+
 function getFallbackQuestions(count) {
   console.log('⚠️ Returning fallback questions');
-  const fallbackQuestions = [
+  const fallback = [
     {
-      id: '1',
-      type: 'multiple_choice',
-      question: 'What is the maximum engine displacement allowed in Formula Student?',
-      options: [
-        '610cc',
-        '650cc',
-        '710cc',
-        '750cc'
-      ],
-      correct_answer: 0,
-      explanation: 'The maximum engine displacement is 610cc according to Formula Student rules.',
+      id: 'fb1',
+      type: 'single_choice',
+      question: 'According to general FS rules, what is the maximum displacement for a combustion engine?',
+      options: ['500cc', '600cc', '710cc', 'Unlimited'],
+      correct_answer: 2,
+      explanation: 'Standard rules typically limit FSAE engines to 710cc.',
       difficulty: 'medium'
     },
     {
-      id: '2',
-      type: 'true_false',
-      question: 'Formula Student cars must have a functioning brake system on all four wheels.',
-      correct_answer: true,
-      explanation: 'All Formula Student cars must have brakes on all four wheels for safety.',
-      difficulty: 'easy'
+      id: 'fb2',
+      type: 'input',
+      question: 'Calculate the points for a Skidpad run of 5.0s if the best time is 4.8s. (Formula: 3.5 + 3.5 * ( (Tmax/Tyour)^2 - 1 ) / ( (Tmax/Tmin)^2 - 1 ) ). Assume Tmax is 1.25*Tmin. Answer to 2 decimal places.',
+      options: [],
+      correct_answer: "42.50",
+      explanation: 'Using the standard scoring formula for skidpad.',
+      difficulty: 'hard'
     },
     {
-      id: '3',
-      type: 'multiple_choice',
-      question: 'Which of the following is required for Formula Student vehicle inspection?',
-      options: [
-        'Roll cage',
-        'Fire extinguisher',
-        'Driver harness',
-        'All of the above'
-      ],
-      correct_answer: 3,
-      explanation: 'All safety equipment including roll cage, fire extinguisher, and driver harness are required.',
-      difficulty: 'easy'
+      id: 'fb3',
+      type: 'multi_choice',
+      question: 'Which of the following are required for the Impact Attenuator Data (IAD) submission?',
+      options: ['Test velocity > 7 m/s', 'Average deceleration < 20g', 'Peak deceleration < 40g', 'Energy absorbed > 7350J'],
+      correct_answer: [0, 1, 2, 3],
+      explanation: 'These are standard IAD requirements.',
+      difficulty: 'medium'
     }
   ];
-  const selected = fallbackQuestions.slice(0, Math.min(count, fallbackQuestions.length));
   return new Response(JSON.stringify({
-    questions: selected,
-    source: 'fallback',
-    reason: 'Gemini generation failed or no documents available',
-    requested: count,
-    generated: selected.length
-  }), {
-    headers: {
-      ...corsHeaders,
-      'Content-Type': 'application/json'
-    },
-    status: 200
-  });
+    questions: fallback.slice(0, count),
+    source: 'fallback'
+  }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 }
