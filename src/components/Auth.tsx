@@ -32,26 +32,26 @@ export default function Auth() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-primary-50 to-primary-100 flex items-center justify-center p-4">
+    <div className="min-h-screen bg-gradient-to-br from-primary-50 to-primary-100 flex items-center justify-center p-3 sm:p-4">
       <div className="max-w-md w-full">
         <div className="text-center mb-8">
           <div className="flex items-center justify-center w-16 h-16 bg-primary-600 rounded-2xl mx-auto mb-4">
             <Trophy className="w-8 h-8 text-white" />
           </div>
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">
+          <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 mb-2">
             Formula Student Trainer
           </h1>
-          <p className="text-gray-600">
+          <p className="text-sm sm:text-base text-gray-600">
             CTM Quiz Training Platform
           </p>
         </div>
 
         <div className="card">
           <div className="mb-6">
-            <h2 className="text-2xl font-bold text-gray-900 mb-2">
+            <h2 className="text-xl sm:text-2xl font-bold text-gray-900 mb-2">
               {isSignUp ? 'Create Account' : 'Welcome Back'}
             </h2>
-            <p className="text-gray-600">
+            <p className="text-sm sm:text-base text-gray-600">
               {isSignUp 
                 ? 'Join your team and start training' 
                 : 'Sign in to continue your training'
@@ -60,7 +60,7 @@ export default function Auth() {
           </div>
 
           {error && (
-            <div className="mb-4 p-3 bg-danger-50 border border-danger-200 rounded-lg flex items-center space-x-2">
+            <div className="mb-4 p-3 bg-danger-50 border border-danger-200 rounded-lg flex items-start space-x-2">
               <AlertCircle className="w-5 h-5 text-danger-600" />
               <span className="text-danger-700 text-sm">{error}</span>
             </div>
@@ -107,7 +107,7 @@ export default function Auth() {
             <button
               type="submit"
               disabled={loading}
-              className="btn-primary w-full"
+              className="btn-primary w-full py-3"
             >
               {loading ? (
                 <span className="loading-dots">

@@ -27,10 +27,10 @@ export default function Layout({ children, currentPage, onPageChange }: LayoutPr
   ]
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 flex flex-col">
       {/* Header */}
       <header className="bg-white shadow-sm border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-2 sm:px-4 lg:px-8">
+        <div className="max-w-7xl mx-auto px-3 sm:px-4 lg:px-8">
           <div className="flex justify-between items-center h-16">
             <div className="flex items-center space-x-3">
               <div className="flex items-center justify-center w-8 h-8 sm:w-10 sm:h-10 bg-primary-600 rounded-lg">
@@ -46,12 +46,12 @@ export default function Layout({ children, currentPage, onPageChange }: LayoutPr
             </div>
             
             <div className="flex items-center space-x-2 sm:space-x-4">
-              <span className="text-xs sm:text-sm text-gray-600 hidden sm:inline">
+              <span className="text-xs sm:text-sm text-gray-600 hidden md:inline truncate max-w-32 sm:max-w-none">
                 Welcome, {user?.email}
               </span>
               <button
                 onClick={signOut}
-                className="flex items-center space-x-1 sm:space-x-2 text-gray-600 hover:text-gray-900 transition-colors"
+                className="flex items-center space-x-1 sm:space-x-2 text-gray-600 hover:text-gray-900 transition-colors p-2 rounded-lg hover:bg-gray-100"
               >
                 <LogOut className="w-3 h-3 sm:w-4 sm:h-4" />
                 <span className="text-xs sm:text-sm">Sign Out</span>
@@ -61,10 +61,10 @@ export default function Layout({ children, currentPage, onPageChange }: LayoutPr
         </div>
       </header>
 
-      <div className="flex">
+      <div className="flex flex-1 overflow-hidden">
         {/* Sidebar */}
-        <nav className="w-16 sm:w-64 bg-white shadow-sm min-h-screen border-r border-gray-200">
-          <div className="p-2 sm:p-4">
+        <nav className="w-16 sm:w-64 bg-white shadow-sm border-r border-gray-200 flex-shrink-0">
+          <div className="p-2 sm:p-4 h-full">
             <div className="space-y-2">
               {navigation.map((item) => {
                 const Icon = item.icon
@@ -87,8 +87,8 @@ export default function Layout({ children, currentPage, onPageChange }: LayoutPr
         </nav>
 
         {/* Main Content */}
-        <main className="flex-1 p-2 sm:p-4 lg:p-6">
-          <div className="max-w-6xl mx-auto">
+        <main className="flex-1 overflow-auto">
+          <div className="p-3 sm:p-4 lg:p-6 max-w-7xl mx-auto w-full">
             {children}
           </div>
         </main>

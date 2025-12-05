@@ -814,33 +814,33 @@ export default function Team() {
 
   // --- VIEW: MAIN MENU ---
   return (
-    <div className="max-w-4xl mx-auto space-y-6 px-4">
-      <h1 className="text-2xl font-bold text-gray-900">Team Challenge</h1>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+    <div className="max-w-4xl mx-auto space-y-4 sm:space-y-6">
+      <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Team Challenge</h1>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
         {/* Create Room */}
         <div className="card text-center">
-            <div className="w-12 h-12 bg-primary-100 rounded-lg flex items-center justify-center mx-auto mb-4"><Plus className="w-6 h-6 text-primary-600" /></div>
-            <h2 className="text-lg font-semibold mb-2">Create Room</h2>
+            <div className="w-10 h-10 sm:w-12 sm:h-12 bg-primary-100 rounded-lg flex items-center justify-center mx-auto mb-4"><Plus className="w-5 h-5 sm:w-6 sm:h-6 text-primary-600" /></div>
+            <h2 className="text-base sm:text-lg font-semibold mb-2">Create Room</h2>
             {showCreateRoom ? (
-                <div className="space-y-4 text-left">
+                <div className="space-y-3 sm:space-y-4 text-left">
                     <input type="text" placeholder="Room Name" value={roomName} onChange={e=>setRoomName(e.target.value)} className="input-field"/>
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                         <div><label className="text-xs text-gray-500">Questions</label><input type="number" className="input-field" value={roomSettings.questionsPerTeam} onChange={e=>setRoomSettings({...roomSettings, questionsPerTeam: +e.target.value})}/></div>
                         <div><label className="text-xs text-gray-500">Time (s)</label><select className="input-field" value={roomSettings.timePerQuestion} onChange={e=>setRoomSettings({...roomSettings, timePerQuestion: +e.target.value})}>{[30,60,90,120].map(s=><option key={s} value={s}>{s}</option>)}</select></div>
                     </div>
-                    <div className="flex gap-2"><button onClick={createRoom} className="btn-primary flex-1">Create</button><button onClick={()=>setShowCreateRoom(false)} className="btn-secondary">Cancel</button></div>
+                    <div className="flex flex-col sm:flex-row gap-2"><button onClick={createRoom} className="btn-primary flex-1">Create</button><button onClick={()=>setShowCreateRoom(false)} className="btn-secondary">Cancel</button></div>
                 </div>
             ) : <button onClick={()=>setShowCreateRoom(true)} className="btn-primary">Create</button>}
         </div>
         {/* Join Room */}
         <div className="card text-center">
-            <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center mx-auto mb-4"><LogIn className="w-6 h-6 text-green-600" /></div>
-            <h2 className="text-lg font-semibold mb-2">Join Room</h2>
+            <div className="w-10 h-10 sm:w-12 sm:h-12 bg-green-100 rounded-lg flex items-center justify-center mx-auto mb-4"><LogIn className="w-5 h-5 sm:w-6 sm:h-6 text-green-600" /></div>
+            <h2 className="text-base sm:text-lg font-semibold mb-2">Join Room</h2>
             {showJoinRoom ? (
-                <div className="space-y-4">
+                <div className="space-y-3 sm:space-y-4">
                     <input type="text" placeholder="CODE" value={roomCode} onChange={e=>setRoomCode(e.target.value.toUpperCase())} className="input-field text-center font-mono uppercase"/>
-                    <div className="flex gap-2">{[1, 2].map(n=><button key={n} onClick={()=>setSelectedTeam(n)} className={`flex-1 py-2 border rounded ${selectedTeam===n?'bg-primary-50 border-primary-500 text-primary-700':'border-gray-200'}`}>Team {n}</button>)}</div>
-                    <div className="flex gap-2"><button onClick={joinRoom} className="btn-primary flex-1">Join</button><button onClick={()=>setShowJoinRoom(false)} className="btn-secondary">Cancel</button></div>
+                    <div className="grid grid-cols-2 gap-2">{[1, 2].map(n=><button key={n} onClick={()=>setSelectedTeam(n)} className={`py-2 border rounded text-sm sm:text-base ${selectedTeam===n?'bg-primary-50 border-primary-500 text-primary-700':'border-gray-200'}`}>Team {n}</button>)}</div>
+                    <div className="flex flex-col sm:flex-row gap-2"><button onClick={joinRoom} className="btn-primary flex-1">Join</button><button onClick={()=>setShowJoinRoom(false)} className="btn-secondary">Cancel</button></div>
                 </div>
             ) : <button onClick={()=>setShowJoinRoom(true)} className="btn-primary">Join</button>}
         </div>
@@ -848,12 +848,12 @@ export default function Team() {
       {/* Active Rooms */}
       {rooms.length > 0 && (
           <div className="card">
-              <h2 className="font-bold mb-4">Active Rooms</h2>
-              <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              <h2 className="text-base sm:text-lg font-bold mb-4">Active Rooms</h2>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
                   {rooms.map(r => (
-                      <div key={r.id} className="p-4 border rounded hover:bg-gray-50 relative">
+                      <div key={r.id} className="p-3 sm:p-4 border rounded hover:bg-gray-50 relative">
                           {user?.id === r.created_by && <button onClick={e=>{e.stopPropagation(); deleteRoom(r.id)}} className="absolute top-2 right-2 text-gray-400 hover:text-red-600"><Trash2 className="w-4 h-4"/></button>}
-                          <h3 className="font-medium">{r.name}</h3>
+                          <h3 className="font-medium text-sm sm:text-base truncate pr-6">{r.name}</h3>
                           <button onClick={()=>{setRoomCode(r.code); setShowJoinRoom(true)}} className="btn-secondary w-full mt-2 text-sm">Join</button>
                       </div>
                   ))}

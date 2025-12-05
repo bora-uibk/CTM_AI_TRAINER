@@ -123,13 +123,13 @@ export default function Chat() {
   }
 
   return (
-    <div className="h-[calc(100vh-8rem)] flex flex-col px-4">
+    <div className="h-[calc(100vh-8rem)] flex flex-col">
       <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">Q&A Chat</h1>
-        <p className="text-gray-600 mt-1">
+        <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Q&A Chat</h1>
+        <p className="text-sm sm:text-base text-gray-600 mt-1">
           Ask questions about Formula Student rules and regulations
         </p>
-        <div className="flex items-center justify-between mt-2">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between mt-2 space-y-2 sm:space-y-0">
           <p className="text-sm text-gray-500">
             {selectedDocuments.size > 0 
               ? `Using ${selectedDocuments.size} selected document${selectedDocuments.size !== 1 ? 's' : ''}`
@@ -149,11 +149,11 @@ export default function Chat() {
       {/* Document Selector */}
       {showDocumentSelector && (
         <div className="card mb-6">
-          <h3 className="text-lg font-semibold text-gray-900 mb-4">Select Documents for Q&A</h3>
+          <h3 className="text-base sm:text-lg font-semibold text-gray-900 mb-4">Select Documents for Q&A</h3>
           {availableDocuments.length === 0 ? (
-            <p className="text-gray-600">No valid documents available. Please upload and process documents first.</p>
+            <p className="text-sm sm:text-base text-gray-600">No valid documents available. Please upload and process documents first.</p>
           ) : (
-            <div className="space-y-2 max-h-60 overflow-y-auto">
+            <div className="space-y-2 max-h-48 sm:max-h-60 overflow-y-auto">
               {availableDocuments.map((doc) => (
                 <div
                   key={doc.id}
@@ -173,9 +173,9 @@ export default function Chat() {
                       <Check className="w-3 h-3 text-white" />
                     )}
                   </div>
-                  <FileText className="w-5 h-5 text-primary-600" />
+                  <FileText className="w-4 h-4 sm:w-5 sm:h-5 text-primary-600 flex-shrink-0" />
                   <div className="flex-1">
-                    <p className="font-medium text-gray-900">{doc.name}</p>
+                    <p className="font-medium text-gray-900 text-sm sm:text-base truncate">{doc.name}</p>
                     <p className="text-sm text-gray-500">{doc.content.length} characters</p>
                   </div>
                 </div>
@@ -195,7 +195,7 @@ export default function Chat() {
 
       {/* Chat Messages */}
       <div className="flex-1 card overflow-hidden flex flex-col">
-        <div className="flex-1 overflow-y-auto custom-scrollbar p-2 sm:p-4 space-y-4">
+        <div className="flex-1 overflow-y-auto custom-scrollbar p-3 sm:p-4 space-y-3 sm:space-y-4">
           {messages.map((message) => (
             <div
               key={message.id}
@@ -267,7 +267,7 @@ export default function Chat() {
         </div>
 
         {/* Input Form */}
-        <div className="border-t border-gray-200 p-2 sm:p-4">
+        <div className="border-t border-gray-200 p-3 sm:p-4">
           <form onSubmit={handleSubmit} className="flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-3">
             <input
               type="text"
@@ -280,7 +280,7 @@ export default function Chat() {
             <button
               type="submit"
               disabled={loading || !input.trim()}
-              className="btn-primary px-4 sm:px-6 w-full sm:w-auto"
+              className="btn-primary px-4 sm:px-6 w-full sm:w-auto py-2 sm:py-2"
             >
               <Send className="w-4 h-4" />
             </button>
