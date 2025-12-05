@@ -1,7 +1,6 @@
-import React from 'react'
+import React, { useEffect } from 'react'
 import { useAuth } from '../contexts/AuthContext'
 import { 
-  BookOpen, 
   MessageCircle, 
   Brain, 
   Users, 
@@ -9,7 +8,8 @@ import {
   FileText,
   Trophy,
   Menu,
-  X
+  ChevronLeft,
+  ChevronRight
 } from 'lucide-react'
 
 interface LayoutProps {
@@ -20,7 +20,27 @@ interface LayoutProps {
 
 export default function Layout({ children, currentPage, onPageChange }: LayoutProps) {
   const { user, signOut } = useAuth()
-  const [sidebarOpen, setSidebarOpen] = React.useState(false)
+  
+  // Default to true (open), we will adjust in useEffect for mobile
+  const [sidebarOpen, setSidebarOpen] = React.useState(true)
+
+  // Auto-collapse sidebar on mobile/tablet initialization
+  useEffect(() => {
+    const handleResize = () => {
+      if (window.innerWidth < 768) {
+        setSidebarOpen(false)
+      } else {
+        setSidebarOpen(true)
+      }
+    }
+
+    // Set initial state based on current width
+    handleResize()
+
+    // Optional: Add event listener if you want it to auto-adjust on resize
+    // window.addEventListener('resize', handleResize)
+    // return () => window.removeEventListener('resize', handleResize)
+  }, [])
 
   const navigation = [
     { id: 'documents', name: 'Documents', icon: FileText },
@@ -35,111 +55,174 @@ export default function Layout({ children, currentPage, onPageChange }: LayoutPr
 
   const handleNavigation = (page: string) => {
     onPageChange(page)
-    // Close sidebar on mobile after navigation
+    // Close sidebar on mobile ONLY after navigation
     if (window.innerWidth < 768) {
       setSidebarOpen(false)
     }
   }
+
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
       {/* Header */}
-      <header className="bg-white shadow-sm border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-3 sm:px-4 lg:px-8">
+      <header className="bg-white shadow-sm border-b border-gray-200 z-30 sticky top-0">
+        <div className="w-full px-3 sm:px-4 lg:px-6">
           <div className="flex justify-between items-center h-16">
-            <div className="flex items-center space-x-3">
-              {/* Mobile menu button */}
+            <div className="flex items-center gap-3 sm:gap-4">
+              {/* Toggle Button - Visible on ALL screens now */}
               <button
                 onClick={toggleSidebar}
-                className="md:hidden p-2 rounded-lg text-gray-600 hover:text-gray-900 hover:bg-gray-100 transition-colors"
+                className="p-2 rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500"
                 aria-label="Toggle navigation"
               >
                 {sidebarOpen ? (
-                  <X className="w-5 h-5" />
+                  /* Show different icons based on open/close state logic */
+                  <div className="flex items-center">
+                    <ChevronLeft className="w-6 h-6 hidden md:block" />
+                    <Menu className="w-6 h-6 md:hidden" />
+                  </div>
                 ) : (
-                  <Menu className="w-5 h-5" />
+                  <div className="flex items-center">
+                     <Menu className="w-6 h-6" />
+                  </div>
                 )}
               </button>
               
-              <div className="flex items-center justify-center w-8 h-8 sm:w-10 sm:h-10 bg-primary-600 rounded-lg">
+              <div className="flex items-center justify-center w-8 h-8 sm:w-10 sm:h-10 bg-primary-600 rounded-lg shrink-0">
                 <Trophy className="w-4 h-4 sm:w-6 sm:h-6 text-white" />
               </div>
-              <div className="hidden sm:block">
-                <h1 className="text-lg sm:text-xl font-bold text-gray-900">Formula Student Trainer</h1>
-                <p className="text-xs sm:text-sm text-gray-500">CTM Quiz Training Platform</p>
-              </div>
-              <div className="sm:hidden">
-                <h1 className="text-lg font-bold text-gray-900">FS Trainer</h1>
+              
+              <div className={`${!sidebarOpen && 'hidden sm:block'}`}>
+                 <h1 className="text-lg sm:text-xl font-bold text-gray-900 leading-tight">
+                   Formula Student
+                 </h1>
+                 <p className="text-xs text-gray-500 hidden sm:block">Trainer Platform</p>
               </div>
             </div>
             
-            <div className="flex items-center space-x-2 sm:space-x-4">
-              <span className="text-xs sm:text-sm text-gray-600 hidden md:inline truncate max-w-32 sm:max-w-none">
-                Welcome, {user?.email}
-              </span>
+            <div className="flex items-center gap-3 sm:gap-4">
+              <div className="hidden md:flex flex-col items-end">
+                <span className="text-sm font-medium text-gray-700">
+                  {user?.email?.split('@')[0]}
+                </span>
+                <span className="text-xs text-gray-500">Student</span>
+              </div>
+              
+              <div className="h-8 w-px bg-gray-200 hidden md:block"></div>
+
               <button
                 onClick={signOut}
-                className="flex items-center space-x-1 sm:space-x-2 text-gray-600 hover:text-gray-900 transition-colors p-2 rounded-lg hover:bg-gray-100"
+                className="flex items-center gap-2 text-gray-600 hover:text-red-600 transition-colors p-2 rounded-lg hover:bg-red-50"
+                title="Sign Out"
               >
-                <LogOut className="w-3 h-3 sm:w-4 sm:h-4" />
-                <span className="text-xs sm:text-sm">Sign Out</span>
+                <LogOut className="w-5 h-5" />
+                <span className="hidden sm:inline text-sm font-medium">Sign Out</span>
               </button>
             </div>
           </div>
         </div>
       </header>
 
-      <div className="flex flex-1 overflow-hidden">
-        {/* Mobile overlay */}
+      <div className="flex flex-1 overflow-hidden relative">
+        {/* Mobile Overlay - Only visible on mobile when open */}
         {sidebarOpen && (
           <div 
-            className="fixed inset-0 bg-black bg-opacity-50 z-20 md:hidden"
+            className="fixed inset-0 bg-gray-900/50 z-20 md:hidden backdrop-blur-sm transition-opacity"
             onClick={() => setSidebarOpen(false)}
           />
         )}
 
-        {/* Sidebar */}
-        <nav className={`
-          fixed md:relative inset-y-0 left-0 z-30 
-          w-64 bg-white shadow-sm border-r border-gray-200 
-          transform transition-transform duration-300 ease-in-out
-          md:translate-x-0 md:w-16 lg:w-64
-          ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}
-        `}>
-          <div className="p-2 sm:p-4 h-full">
-            {/* Mobile close button */}
-            <div className="flex justify-end mb-4 md:hidden">
-              <button
-                onClick={() => setSidebarOpen(false)}
-                className="p-2 rounded-lg text-gray-600 hover:text-gray-900 hover:bg-gray-100"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            
-            <div className="space-y-2">
+        {/* Sidebar Navigation */}
+        <aside 
+          className={`
+            fixed md:relative z-30 h-full bg-white border-r border-gray-200 
+            transition-all duration-300 ease-in-out flex flex-col
+            ${sidebarOpen 
+              ? 'translate-x-0 w-64' // Mobile Open & Desktop Open
+              : '-translate-x-full w-64 md:translate-x-0 md:w-20' // Mobile Closed (hidden) & Desktop Closed (Mini)
+            }
+          `}
+        >
+          <div className="flex-1 py-6 overflow-y-auto overflow-x-hidden">
+            <nav className="space-y-1 px-3">
               {navigation.map((item) => {
                 const Icon = item.icon
+                const isActive = currentPage === item.id
+                
                 return (
                   <button
                     key={item.id}
                     onClick={() => handleNavigation(item.id)}
-                    className={`nav-link w-full text-left justify-center md:justify-center lg:justify-start ${
-                      currentPage === item.id ? 'active' : ''
-                    }`}
-                    title={item.name}
+                    className={`
+                      relative group w-full flex items-center p-3 rounded-lg transition-all duration-200
+                      ${isActive 
+                        ? 'bg-primary-50 text-primary-700 font-medium' 
+                        : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                      }
+                      ${!sidebarOpen && 'md:justify-center'} /* Center icons when collapsed */
+                    `}
+                    title={!sidebarOpen ? item.name : ''} // Tooltip for collapsed state
                   >
-                    <Icon className="w-4 h-4 sm:w-5 sm:h-5" />
-                    <span className="md:hidden lg:inline">{item.name}</span>
+                    {/* Active Indicator Strip */}
+                    {isActive && (
+                      <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 bg-primary-600 rounded-r-full" />
+                    )}
+
+                    <Icon 
+                      className={`
+                        shrink-0 w-5 h-5 transition-colors
+                        ${isActive ? 'text-primary-600' : 'text-gray-500 group-hover:text-gray-700'}
+                      `} 
+                    />
+                    
+                    {/* Text Label - Hides smoothly when collapsed */}
+                    <span 
+                      className={`
+                        ml-3 whitespace-nowrap transition-all duration-300 origin-left
+                        ${sidebarOpen 
+                          ? 'opacity-100 translate-x-0' 
+                          : 'md:opacity-0 md:w-0 md:hidden'
+                        }
+                      `}
+                    >
+                      {item.name}
+                    </span>
+
+                    {/* Desktop Hover Tooltip (Bubble) */}
+                    {!sidebarOpen && (
+                      <div className="
+                        absolute left-full top-1/2 -translate-y-1/2 ml-4 px-2 py-1 
+                        bg-gray-900 text-white text-xs rounded opacity-0 invisible 
+                        group-hover:opacity-100 group-hover:visible transition-all 
+                        z-50 whitespace-nowrap hidden md:block pointer-events-none
+                      ">
+                        {item.name}
+                        {/* Little arrow pointing left */}
+                        <div className="absolute left-0 top-1/2 -translate-y-1/2 -ml-1 border-4 border-transparent border-r-gray-900" />
+                      </div>
+                    )}
                   </button>
                 )
               })}
-            </div>
+            </nav>
           </div>
-        </nav>
 
-        {/* Main Content */}
-        <main className="flex-1 overflow-auto md:ml-0">
-          <div className="p-3 sm:p-4 lg:p-6 max-w-7xl mx-auto w-full">
+          {/* Footer of Sidebar */}
+          <div className={`p-4 border-t border-gray-100 ${!sidebarOpen && 'md:items-center md:flex md:flex-col'}`}>
+             <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-bold text-xs">
+                  {user?.email?.charAt(0).toUpperCase()}
+                </div>
+                <div className={`transition-all duration-300 overflow-hidden ${!sidebarOpen && 'md:w-0 md:opacity-0 hidden'}`}>
+                  <p className="text-sm font-medium text-gray-700 truncate max-w-[140px]">My Profile</p>
+                  <p className="text-xs text-gray-500">View Settings</p>
+                </div>
+             </div>
+          </div>
+        </aside>
+
+        {/* Main Content Area */}
+        <main className="flex-1 overflow-y-auto bg-gray-50 p-4 lg:p-8 w-full">
+          <div className="max-w-6xl mx-auto animate-in fade-in duration-500">
             {children}
           </div>
         </main>
