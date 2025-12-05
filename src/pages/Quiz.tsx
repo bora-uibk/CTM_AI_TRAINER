@@ -1,26 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
-import { 
-  Brain, 
-  CircleCheck as CheckCircle, 
-  Circle as XCircle, 
-  RotateCcw, 
-  Trophy, 
-  Loader, 
-  CircleAlert as AlertCircle,
-  Clock,
-  Settings,
-  Play,
-  Pause,
-  FileText,
-  Check,
-  BookOpen,
-  Square,
-  CheckSquare,
-  Type,
-  Hash
-} from 'lucide-react'
+import { Brain, CircleCheck as CheckCircle, Circle as XCircle, RotateCcw, Trophy, Loader, CircleAlert as AlertCircle, Clock, Settings, Play, Pause, FileText, Check, BookOpen, Square, SquareCheck as CheckSquare, Type, Hash } from 'lucide-react'
 
 // 1. Define Question Interface
 interface QuizQuestion {
