@@ -193,22 +193,3 @@ export default function Auth() {
     </div>
   )
 }
-            <button
-              onClick={() => setIsSignUp(!isSignUp)}
-              className="text-primary-600 hover:text-primary-700 text-sm font-medium"
-            >
-              {isSignUp 
-                ? 'Already have an account? Sign in' 
-                : "Don't have an account? Sign up"
-              }
-            </button>
-          </div>
-        </div>
-
-        <div className="mt-8 text-center text-sm text-gray-500">
-          <p>Powered by AI • Secure • Real-time Collaboration</p>
-        </div>
-      </div>
-    </div>
-  )
-}
