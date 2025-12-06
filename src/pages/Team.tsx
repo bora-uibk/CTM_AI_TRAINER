@@ -25,21 +25,14 @@ export default function Team() {
   const [currentRoom, setCurrentRoom] = useState<ExtendedTeamRoom | null>(null)
   const [participants, setParticipants] = useState<RoomParticipant[]>([])
   
-  // Modal / Form State
+  // Form State
   const [showCreateRoom, setShowCreateRoom] = useState(false)
-  const [showJoinRoom, setShowJoinRoom] = useState(false)
   const [roomName, setRoomName] = useState('')
-  const [roomCode, setRoomCode] = useState('')
   const [loading, setLoading] = useState(false)
-  
-  // Team selection state
-  const [showTeamSelection, setShowTeamSelection] = useState(false)
-  const [pendingRoomId, setPendingRoomId] = useState<string | null>(null)
   
   // Game State
   // selectedAnswer can be: index (number), indices (number[]), or text (string)
   const [selectedAnswer, setSelectedAnswer] = useState<string | number | number[] | null>(null)
-  const [selectedTeam, setSelectedTeam] = useState<number>(1)
   const [timeRemaining, setTimeRemaining] = useState(0)
   const [timerActive, setTimerActive] = useState(false)
   const [selectedDocuments, setSelectedDocuments] = useState<Set<string>>(new Set())
@@ -249,35 +242,19 @@ export default function Team() {
     }
   }
 
-  const joinRoom = async () => {
+  const joinRoom = async (roomCode: string) => {
     if (!roomCode.trim() || !user) return
     setLoading(true)
     try {
       const { data: room, error: roomError } = await supabase
         .from('team_rooms')
         .select('*')
-        .eq('code', roomCode.trim().toUpperCase())
+        .eq('code', roomCode.trim())
         .eq('is_active', true)
         .single()
       if (roomError) throw new Error('Room not found')
 
-      const { data: existing } = await supabase
-        .from('room_participants')
-        .select('*')
-        .eq('room_id', room.id)
-        .eq('user_id', user.id)
-        .maybeSingle()
-
-      if (!existing) {
-        // Show team selection modal instead of using pre-selected team
-        setPendingRoomId(room.id)
-        setShowTeamSelection(true)
-        setLoading(false)
-        return
-      }
       setCurrentRoom(room)
-      setShowJoinRoom(false)
-      setRoomCode('')
     } catch (error: any) {
       alert(error.message)
     } finally {
@@ -285,12 +262,42 @@ export default function Team() {
     }
   }
 
-  const confirmTeamSelection = async (teamNumber: number) => {
-    if (!pendingRoomId || !user) return
+  const selectTeam = async (teamNumber: number) => {
+    if (!currentRoom || !user) return
     setLoading(true)
     try {
-      await supabase.from('room_participants').insert({
-        room_id: pendingRoomId,
+      // Check if user is already in the room
+      const { data: existing } = await supabase
+        .from('room_participants')
+        .select('*')
+        .eq('room_id', currentRoom.id)
+        .eq('user_id', user.id)
+        .maybeSingle()
+
+      if (existing) {
+        // Update existing team
+        await supabase.from('room_participants')
+          .update({ team_number: teamNumber })
+          .eq('id', existing.id)
+      } else {
+        // Insert new participant
+        await supabase.from('room_participants').insert({
+          room_id: currentRoom.id,
+          user_id: user.id,
+          user_email: user.email || '',
+          team_number: teamNumber
+        })
+      }
+
+      // Refresh participants
+      await fetchParticipants()
+    } catch (error) {
+      console.error('Error selecting team:', error)
+      alert('Failed to select team')
+    } finally {
+      setLoading(false)
+    }
+  }
         user_id: user.id,
         user_email: user.email || '',
         team_number: teamNumber
@@ -811,12 +818,79 @@ export default function Team() {
 
   // --- VIEW: LOBBY ---
   if (currentRoom && currentRoom.room_status === 'lobby') {
+    const userParticipant = participants.find(p => p.user_id === user?.id)
+    const team1Members = participants.filter(p => p.team_number === 1)
+    const team2Members = participants.filter(p => p.team_number === 2)
+    
     return (
       <div className="max-w-4xl mx-auto space-y-6 px-4">
         <div className="flex justify-between items-center">
             <div><h1 className="text-2xl font-bold">{currentRoom.name}</h1><p>Code: {currentRoom.code}</p></div>
             <div className="flex gap-2"><button onClick={leaveRoom} className="btn-secondary">Leave</button>{isRoomCreator && <button onClick={()=>deleteRoom(currentRoom.id)} className="btn-secondary text-red-600">Delete</button>}</div>
         </div>
+        
+        {/* Team Selection Section */}
+        {!userParticipant && (
+          <div className="card bg-blue-50 border-blue-200">
+            <h2 className="text-lg font-bold text-blue-900 mb-4">Select Your Team</h2>
+            <p className="text-blue-700 mb-6">Choose which team you'd like to join for this challenge.</p>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="bg-white rounded-lg border-2 border-primary-200 p-4">
+                <div className="flex justify-between items-center mb-3">
+                  <h3 className="text-lg font-bold text-primary-600">Team 1</h3>
+                  <span className="text-sm text-gray-500">{team1Members.length} member{team1Members.length !== 1 ? 's' : ''}</span>
+                </div>
+                <div className="space-y-2 mb-4 min-h-[60px]">
+                  {team1Members.map(member => (
+                    <div key={member.id} className="flex items-center space-x-2 text-sm">
+                      <div className="w-2 h-2 bg-primary-500 rounded-full"></div>
+                      <span className="truncate">{member.user_email}</span>
+                      {member.user_id === currentRoom.created_by && <Crown className="w-3 h-3 text-yellow-500" />}
+                    </div>
+                  ))}
+                  {team1Members.length === 0 && (
+                    <div className="text-gray-400 text-sm italic">No members yet</div>
+                  )}
+                </div>
+                <button
+                  onClick={() => selectTeam(1)}
+                  disabled={loading}
+                  className="btn-primary w-full"
+                >
+                  Join Team 1
+                </button>
+              </div>
+              
+              <div className="bg-white rounded-lg border-2 border-green-200 p-4">
+                <div className="flex justify-between items-center mb-3">
+                  <h3 className="text-lg font-bold text-green-600">Team 2</h3>
+                  <span className="text-sm text-gray-500">{team2Members.length} member{team2Members.length !== 1 ? 's' : ''}</span>
+                </div>
+                <div className="space-y-2 mb-4 min-h-[60px]">
+                  {team2Members.map(member => (
+                    <div key={member.id} className="flex items-center space-x-2 text-sm">
+                      <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                      <span className="truncate">{member.user_email}</span>
+                      {member.user_id === currentRoom.created_by && <Crown className="w-3 h-3 text-yellow-500" />}
+                    </div>
+                  ))}
+                  {team2Members.length === 0 && (
+                    <div className="text-gray-400 text-sm italic">No members yet</div>
+                  )}
+                </div>
+                <button
+                  onClick={() => selectTeam(2)}
+                  disabled={loading}
+                  className="btn-primary w-full bg-green-600 hover:bg-green-700"
+                >
+                  Join Team 2
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        
         <div className="grid md:grid-cols-2 gap-6">
             <div className="card">
                 <h2 className="font-bold mb-4">Settings</h2>
@@ -824,15 +898,66 @@ export default function Team() {
                     <div className="flex justify-between"><span>Questions/Team:</span><b>{currentRoom.questions_per_team}</b></div>
                     <div className="flex justify-between"><span>Time:</span><b>{currentRoom.time_per_question}s</b></div>
                 </div>
-                {isRoomCreator && <button onClick={startGame} disabled={loading || participants.length < 2} className="btn-primary w-full mt-6">{loading ? <Loader className="animate-spin w-4 h-4 mx-auto"/> : 'Start Game'}</button>}
+                {isRoomCreator && <button onClick={startGame} disabled={loading || participants.length < 2 || selectedDocuments.size === 0} className="btn-primary w-full mt-6">{loading ? <Loader className="animate-spin w-4 h-4 mx-auto"/> : 'Start Game'}</button>}
+                {isRoomCreator && selectedDocuments.size === 0 && (
+                  <p className="text-xs text-orange-600 mt-2">⚠️ Please select documents in the Documents page first</p>
+                )}
             </div>
             <div className="card">
-                <h2 className="font-bold mb-4">Players ({participants.length})</h2>
-                {[1, 2].map(t => (
-                    <div key={t} className="mb-4">
-                        <h3 className="text-sm font-bold text-gray-500 uppercase">Team {t}</h3>
-                        {participants.filter(p=>p.team_number===t).map(p=><div key={p.id} className="text-sm py-1">{p.user_email}</div>)}
+                <div className="flex justify-between items-center mb-4">
+                  <h2 className="font-bold">Players ({participants.length})</h2>
+                  {userParticipant && (
+                    <span className="text-xs bg-gray-100 px-2 py-1 rounded">
+                      You're on Team {userParticipant.team_number}
+                    </span>
+                  )}
+                </div>
+                
+                {userParticipant && (
+                  <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                    <p className="text-sm text-yellow-800 mb-2">Want to switch teams?</p>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => selectTeam(1)}
+                        disabled={loading || userParticipant.team_number === 1}
+                        className="btn-secondary text-xs px-3 py-1 disabled:opacity-50"
+                      >
+                        Team 1
+                      </button>
+                      <button
+                        onClick={() => selectTeam(2)}
+                        disabled={loading || userParticipant.team_number === 2}
+                        className="btn-secondary text-xs px-3 py-1 disabled:opacity-50"
+                      >
+                        Team 2
+                      </button>
                     </div>
+                  </div>
+                )}
+                
+                {[1, 2].map(t => (
+                  <div key={t} className="mb-4">
+                    <h3 className="text-sm font-bold text-gray-500 uppercase flex items-center">
+                      Team {t}
+                      <span className="ml-2 text-xs bg-gray-200 px-2 py-0.5 rounded">
+                        {participants.filter(p => p.team_number === t).length}
+                      </span>
+                    </h3>
+                    <div className="space-y-1">
+                      {participants.filter(p => p.team_number === t).map(p => (
+                        <div key={p.id} className="text-sm py-1 flex items-center justify-between">
+                          <div className="flex items-center space-x-2">
+                            <span className="truncate">{p.user_email}</span>
+                            {p.user_id === currentRoom.created_by && <Crown className="w-3 h-3 text-yellow-500" />}
+                            {p.user_id === user?.id && <span className="text-xs text-blue-600">(You)</span>}
+                          </div>
+                        </div>
+                      ))}
+                      {participants.filter(p => p.team_number === t).length === 0 && (
+                        <div className="text-xs text-gray-400 italic py-1">No members</div>
+                      )}
+                    </div>
+                  </div>
                 ))}
             </div>
         </div>
@@ -844,48 +969,6 @@ export default function Team() {
   return (
     <div className="max-w-4xl mx-auto space-y-4 sm:space-y-6">
       <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Team Challenge</h1>
-      
-      {/* Team Selection Modal */}
-      {showTeamSelection && (
-        <div className="fixed inset-0 bg-gray-900/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6">
-            <h3 className="text-lg font-bold text-gray-900 mb-4">Select Your Team</h3>
-            <p className="text-gray-600 mb-6">Choose which team you'd like to join for this challenge.</p>
-            
-            <div className="grid grid-cols-2 gap-4 mb-6">
-              <button
-                onClick={() => confirmTeamSelection(1)}
-                disabled={loading}
-                className="p-4 border-2 border-primary-200 rounded-lg hover:border-primary-500 hover:bg-primary-50 transition-colors text-center"
-              >
-                <div className="text-2xl font-bold text-primary-600 mb-2">Team 1</div>
-                <div className="text-sm text-gray-600">Join Team 1</div>
-              </button>
-              
-              <button
-                onClick={() => confirmTeamSelection(2)}
-                disabled={loading}
-                className="p-4 border-2 border-green-200 rounded-lg hover:border-green-500 hover:bg-green-50 transition-colors text-center"
-              >
-                <div className="text-2xl font-bold text-green-600 mb-2">Team 2</div>
-                <div className="text-sm text-gray-600">Join Team 2</div>
-              </button>
-            </div>
-            
-            <button
-              onClick={() => {
-                setShowTeamSelection(false)
-                setPendingRoomId(null)
-                setShowJoinRoom(false)
-              }}
-              className="btn-secondary w-full"
-              disabled={loading}
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
       
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
         {/* Create Room */}
@@ -903,17 +986,6 @@ export default function Team() {
                 </div>
             ) : <button onClick={()=>setShowCreateRoom(true)} className="btn-primary">Create</button>}
         </div>
-        {/* Join Room */}
-        <div className="card text-center">
-            <div className="w-10 h-10 sm:w-12 sm:h-12 bg-green-100 rounded-lg flex items-center justify-center mx-auto mb-4"><LogIn className="w-5 h-5 sm:w-6 sm:h-6 text-green-600" /></div>
-            <h2 className="text-base sm:text-lg font-semibold mb-2">Join Room</h2>
-            {showJoinRoom ? (
-                <div className="space-y-3 sm:space-y-4">
-                    <input type="text" placeholder="CODE" value={roomCode} onChange={e=>setRoomCode(e.target.value.toUpperCase())} className="input-field text-center font-mono uppercase"/>
-                    <div className="flex flex-col sm:flex-row gap-2"><button onClick={joinRoom} className="btn-primary flex-1">Join</button><button onClick={()=>setShowJoinRoom(false)} className="btn-secondary">Cancel</button></div>
-                </div>
-            ) : <button onClick={()=>setShowJoinRoom(true)} className="btn-primary">Join</button>}
-        </div>
       </div>
       {/* Active Rooms */}
       {rooms.length > 0 && (
@@ -924,7 +996,10 @@ export default function Team() {
                       <div key={r.id} className="p-3 sm:p-4 border rounded hover:bg-gray-50 relative">
                           {user?.id === r.created_by && <button onClick={e=>{e.stopPropagation(); deleteRoom(r.id)}} className="absolute top-2 right-2 text-gray-400 hover:text-red-600"><Trash2 className="w-4 h-4"/></button>}
                           <h3 className="font-medium text-sm sm:text-base truncate pr-6">{r.name}</h3>
-                          <button onClick={()=>{setRoomCode(r.code); setShowJoinRoom(true)}} className="btn-secondary w-full mt-2 text-sm">Join</button>
+                          <div className="text-xs text-gray-500 mb-2">Code: {r.code}</div>
+                          <button onClick={() => joinRoom(r.code)} disabled={loading} className="btn-primary w-full mt-2 text-sm">
+                            {loading ? <Loader className="w-4 h-4 animate-spin mx-auto" /> : 'Join'}
+                          </button>
                       </div>
                   ))}
               </div>
