@@ -32,6 +32,10 @@ export default function Team() {
   const [roomCode, setRoomCode] = useState('')
   const [loading, setLoading] = useState(false)
   
+  // Team selection state
+  const [showTeamSelection, setShowTeamSelection] = useState(false)
+  const [pendingRoomId, setPendingRoomId] = useState<string | null>(null)
+  
   // Game State
   // selectedAnswer can be: index (number), indices (number[]), or text (string)
   const [selectedAnswer, setSelectedAnswer] = useState<string | number | number[] | null>(null)
@@ -265,19 +269,47 @@ export default function Team() {
         .maybeSingle()
 
       if (!existing) {
-        if (selectedTeam > 2) { alert("Only 2 teams allowed"); setLoading(false); return; }
-        await supabase.from('room_participants').insert({
-            room_id: room.id,
-            user_id: user.id,
-            user_email: user.email || '',
-            team_number: selectedTeam
-          })
+        // Show team selection modal instead of using pre-selected team
+        setPendingRoomId(room.id)
+        setShowTeamSelection(true)
+        setLoading(false)
+        return
       }
       setCurrentRoom(room)
       setShowJoinRoom(false)
       setRoomCode('')
     } catch (error: any) {
       alert(error.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const confirmTeamSelection = async (teamNumber: number) => {
+    if (!pendingRoomId || !user) return
+    setLoading(true)
+    try {
+      await supabase.from('room_participants').insert({
+        room_id: pendingRoomId,
+        user_id: user.id,
+        user_email: user.email || '',
+        team_number: teamNumber
+      })
+
+      const { data: room } = await supabase
+        .from('team_rooms')
+        .select('*')
+        .eq('id', pendingRoomId)
+        .single()
+
+      setCurrentRoom(room)
+      setShowJoinRoom(false)
+      setShowTeamSelection(false)
+      setPendingRoomId(null)
+      setRoomCode('')
+    } catch (error) {
+      console.error('Error joining room:', error)
+      alert('Failed to join room')
     } finally {
       setLoading(false)
     }
@@ -812,6 +844,49 @@ export default function Team() {
   return (
     <div className="max-w-4xl mx-auto space-y-4 sm:space-y-6">
       <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Team Challenge</h1>
+      
+      {/* Team Selection Modal */}
+      {showTeamSelection && (
+        <div className="fixed inset-0 bg-gray-900/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6">
+            <h3 className="text-lg font-bold text-gray-900 mb-4">Select Your Team</h3>
+            <p className="text-gray-600 mb-6">Choose which team you'd like to join for this challenge.</p>
+            
+            <div className="grid grid-cols-2 gap-4 mb-6">
+              <button
+                onClick={() => confirmTeamSelection(1)}
+                disabled={loading}
+                className="p-4 border-2 border-primary-200 rounded-lg hover:border-primary-500 hover:bg-primary-50 transition-colors text-center"
+              >
+                <div className="text-2xl font-bold text-primary-600 mb-2">Team 1</div>
+                <div className="text-sm text-gray-600">Join Team 1</div>
+              </button>
+              
+              <button
+                onClick={() => confirmTeamSelection(2)}
+                disabled={loading}
+                className="p-4 border-2 border-green-200 rounded-lg hover:border-green-500 hover:bg-green-50 transition-colors text-center"
+              >
+                <div className="text-2xl font-bold text-green-600 mb-2">Team 2</div>
+                <div className="text-sm text-gray-600">Join Team 2</div>
+              </button>
+            </div>
+            
+            <button
+              onClick={() => {
+                setShowTeamSelection(false)
+                setPendingRoomId(null)
+                setShowJoinRoom(false)
+              }}
+              className="btn-secondary w-full"
+              disabled={loading}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+      
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
         {/* Create Room */}
         <div className="card text-center">
@@ -835,7 +910,6 @@ export default function Team() {
             {showJoinRoom ? (
                 <div className="space-y-3 sm:space-y-4">
                     <input type="text" placeholder="CODE" value={roomCode} onChange={e=>setRoomCode(e.target.value.toUpperCase())} className="input-field text-center font-mono uppercase"/>
-                    <div className="grid grid-cols-2 gap-2">{[1, 2].map(n=><button key={n} onClick={()=>setSelectedTeam(n)} className={`py-2 border rounded text-sm sm:text-base ${selectedTeam===n?'bg-primary-50 border-primary-500 text-primary-700':'border-gray-200'}`}>Team {n}</button>)}</div>
                     <div className="flex flex-col sm:flex-row gap-2"><button onClick={joinRoom} className="btn-primary flex-1">Join</button><button onClick={()=>setShowJoinRoom(false)} className="btn-secondary">Cancel</button></div>
                 </div>
             ) : <button onClick={()=>setShowJoinRoom(true)} className="btn-primary">Join</button>}
