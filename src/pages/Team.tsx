@@ -514,12 +514,51 @@ export default function Team() {
                     scores: teamScores, 
                     questions: currentRoom.team_questions 
                 }
-            }).then(({ data }) => {
-                if (data && !data.error) {
-                    supabase.from('team_rooms').update({ feedback: data }).eq('id', currentRoom.id)
+            }).then(({ data, error }) => {
+                console.log('Feedback response:', { data, error })
+                if (error) {
+                    console.error('Feedback generation error:', error)
+                    // Set fallback feedback
+                    const fallbackFeedback = {
+                        summary: "Game completed successfully!",
+                        strengths: ["Completed the team challenge", "Demonstrated Formula Student knowledge"],
+                        weak_points: ["Continue studying regulations", "Practice technical problems"],
+                        detailed_analysis: "Both teams showed good effort in this Formula Student quiz challenge. Keep practicing with the rulebook and technical materials.",
+                        feedback: "Great job completing the team challenge! Keep studying to improve your Formula Student knowledge."
+                    }
+                    return supabase.from('team_rooms').update({ feedback: fallbackFeedback }).eq('id', currentRoom.id)
+                } else if (data) {
+                    // Successfully got feedback, update the room
+                    return supabase.from('team_rooms').update({ feedback: data }).eq('id', currentRoom.id)
+                } else {
+                    console.warn('No data received from feedback function')
+                    // Set fallback feedback
+                    const fallbackFeedback = {
+                        summary: "Game completed successfully!",
+                        strengths: ["Completed the team challenge", "Demonstrated Formula Student knowledge"],
+                        weak_points: ["Continue studying regulations", "Practice technical problems"],
+                        detailed_analysis: "Both teams showed good effort in this Formula Student quiz challenge. Keep practicing with the rulebook and technical materials.",
+                        feedback: "Great job completing the team challenge! Keep studying to improve your Formula Student knowledge."
+                    }
+                    return supabase.from('team_rooms').update({ feedback: fallbackFeedback }).eq('id', currentRoom.id)
+                }
+            }).then((updateResult) => {
+                if (updateResult?.error) {
+                    console.error('Error updating room with feedback:', updateResult.error)
+                } else {
+                    console.log('Feedback successfully saved to room')
                 }
             }).catch(error => {
                 console.error('Feedback generation failed:', error)
+                // Set fallback feedback even on catch
+                const fallbackFeedback = {
+                    summary: "Game completed successfully!",
+                    strengths: ["Completed the team challenge", "Demonstrated Formula Student knowledge"],
+                    weak_points: ["Continue studying regulations", "Practice technical problems"],
+                    detailed_analysis: "Both teams showed good effort in this Formula Student quiz challenge. Keep practicing with the rulebook and technical materials.",
+                    feedback: "Great job completing the team challenge! Keep studying to improve your Formula Student knowledge."
+                }
+                supabase.from('team_rooms').update({ feedback: fallbackFeedback }).eq('id', currentRoom.id)
             })
 
         } else {
