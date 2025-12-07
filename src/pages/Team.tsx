@@ -507,11 +507,19 @@ export default function Team() {
                 updated_at: new Date().toISOString()
             }).eq('id', currentRoom.id)
             
-            // Trigger Feedback AI
+            // Trigger Feedback AI - Fixed parameter alignment
             supabase.functions.invoke('generate-feedback', {
-                body: { scores: teamScores, questions: currentRoom.team_questions }
+                body: { 
+                    mode: 'team',
+                    scores: teamScores, 
+                    questions: currentRoom.team_questions 
+                }
             }).then(({ data }) => {
-                if(data) supabase.from('team_rooms').update({ feedback: data }).eq('id', currentRoom.id)
+                if (data && !data.error) {
+                    supabase.from('team_rooms').update({ feedback: data }).eq('id', currentRoom.id)
+                }
+            }).catch(error => {
+                console.error('Feedback generation failed:', error)
             })
 
         } else {
