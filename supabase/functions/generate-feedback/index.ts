@@ -7,17 +7,22 @@ const corsHeaders = {
 };
 
 serve(async (req) => {
+  console.log("-> 1. START: Request received.");
+  
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
   }
 
   try {
     const payload = await req.json();
+    console.log("-> 2. Payload parsed successfully.");
+    
     // Default missing mode to "team" for backward compatibility
     const mode = payload.mode?.toLowerCase() || "team";
-    console.log("📝 Feedback Request Mode:", mode);
+    console.log(`-> 3. Mode detected: ${mode.toUpperCase()}`);
 
     let result;
+    const startTime = Date.now();
 
     // ===========================
     // Individual Mode
@@ -45,6 +50,11 @@ serve(async (req) => {
         throw new Error("Scores and Questions are required for team mode");
       }
 
+      // Check if the input structure for questions is valid (must be an object)
+      if (typeof questions !== 'object' || questions === null) {
+          throw new Error("Questions payload must be a dictionary keyed by team number.");
+      }
+
       result = await generateGameFeedback(scores, questions);
     }
 
@@ -54,6 +64,9 @@ serve(async (req) => {
     else {
       throw new Error(`Invalid mode '${mode}'. Must be 'team' or 'individual'`);
     }
+    
+    const duration = Date.now() - startTime;
+    console.log(`-> 5. SUCCESS: Feedback generated and processed in ${duration}ms.`);
 
     return new Response(JSON.stringify(result), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -61,9 +74,9 @@ serve(async (req) => {
     });
 
   } catch (error) {
-    console.error("❌ Feedback generation error:", error);
+    console.error("❌ 5. FAILURE: Feedback generation error:", error.message || error);
 
-    // Fallback response
+    // Fallback response for all errors
     return new Response(JSON.stringify({
       summary: "Feedback unavailable.",
       strengths: ["Quiz Completed"],
@@ -86,9 +99,10 @@ async function generateIndividualFeedback(questions, userAnswers, score, total) 
   if (!apiKey) throw new Error("Gemini API key not configured");
 
   const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
+  const model = genAI.getGenerativeModel({ model: "gemini-3-pro-preview" });
 
-  const percentage = Math.round((score / total) * 100);
+  const totalQuestions = total || questions.length;
+  const percentage = Math.round((score / totalQuestions) * 100);
 
   const questionSummary = questions.map((q, index) => {
     const userAnswer = userAnswers[index];
@@ -105,7 +119,8 @@ async function generateIndividualFeedback(questions, userAnswers, score, total) 
     }
 
     return {
-      question: q.question.slice(0, 80) + "...",
+      // Safely access the question text and detect topic
+      question: (q.question && q.question.slice(0, 80) + "...") || "N/A",
       topic: detectTopic(q.question),
       correct: isCorrect
     };
@@ -115,7 +130,7 @@ async function generateIndividualFeedback(questions, userAnswers, score, total) 
 Analyze this individual Formula Student engineering quiz performance.
 
 STATS:
-- Score: ${score} / ${total} (${percentage}%)
+- Score: ${score} / ${totalQuestions} (${percentage}%)
 - Performance Data: ${JSON.stringify(questionSummary)}
 
 TASK:
@@ -132,10 +147,16 @@ OUTPUT FORMAT (Strict JSON):
 }
 `;
 
+  console.log("-> 4A. Starting individual mode AI generation...");
+  const aiCallStart = Date.now();
+
   const raw = await model.generateContent({
     contents: [{ role: "user", parts: [{ text: prompt }] }],
     generationConfig: { responseMimeType: "application/json" }
   });
+  
+  const aiCallDuration = Date.now() - aiCallStart;
+  console.log(`-> 4B. AI generation finished in ${aiCallDuration}ms. Proceeding to JSON parse.`);
 
   return safeJson(raw.response.text());
 }
@@ -154,10 +175,15 @@ async function generateGameFeedback(scores, questions) {
   const team1Score = scores["1"] ?? 0;
   const team2Score = scores["2"] ?? 0;
 
+  // Filter out any non-array/nullish inputs before spreading
+  const team1Questions = Array.isArray(questions["1"]) ? questions["1"] : [];
+  const team2Questions = Array.isArray(questions["2"]) ? questions["2"] : [];
+
+  // Combine and filter out malformed questions (missing 'question' property)
   const allQuestions = [
-    ...(questions["1"] ?? []),
-    ...(questions["2"] ?? [])
-  ];
+    ...team1Questions,
+    ...team2Questions
+  ].filter(q => q && typeof q.question === 'string'); // CRITICAL: Only process valid question objects
 
   const topics = Array.from(new Set(allQuestions.map(q => detectTopic(q.question)))).join(", ");
 
@@ -182,13 +208,32 @@ OUTPUT FORMAT (Strict JSON):
   "detailed_analysis": "A paragraph offering advice on the topics."
 }
 `;
+  console.log(`-> 4A. Starting team mode AI generation (Total Questions: ${allQuestions.length}, Topics: ${topics.split(',').length}).`);
+  console.log("   Full Prompt (for debug):", prompt.substring(0, 500) + '...'); // Log a partial prompt for debugging payload size/content
 
+  const aiCallStart = Date.now();
   const raw = await model.generateContent({
     contents: [{ role: "user", parts: [{ text: prompt }] }],
     generationConfig: { responseMimeType: "application/json" }
   });
+  
+  const aiCallDuration = Date.now() - aiCallStart;
+  console.log(`-> 4B. AI generation finished in ${aiCallDuration}ms. Proceeding to JSON parse.`);
+  
+  const rawText = raw.response.text();
+  
+  // CRITICAL FIX: Explicitly check for an empty response string
+  if (rawText.trim().length === 0) {
+      throw new Error(`AI response was empty (likely a timeout or API failure after ${aiCallDuration}ms). Raw text length: 0.`);
+  }
 
-  return safeJson(raw.response.text());
+  const parsedJson = safeJson(rawText);
+
+  // Ensure the team response object contains the 'feedback' property
+  return {
+    ...parsedJson,
+    feedback: parsedJson.detailed_analysis // Use detailed_analysis as the feedback field
+  };
 }
 
 
@@ -198,15 +243,20 @@ OUTPUT FORMAT (Strict JSON):
 function safeJson(text) {
   try {
     text = text.replace(/```json|```/g, "").trim();
-    return JSON.parse(text);
+    console.log("-> 4C. Attempting to parse JSON...");
+    const result = JSON.parse(text);
+    console.log("-> 4D. JSON parsed successfully.");
+    return result;
   } catch (e) {
-    console.error("⚠️ Failed to parse JSON, returning fallback:", text);
+    // Note: The empty string error is now primarily handled in generateGameFeedback before this point.
+    console.error(`⚠️ JSON PARSE FAILED. Raw text length: ${text.length}. Error: ${e.message}`);
+    // Returning a fallback structure that matches the expected response
     return {
-      summary: "AI feedback unavailable.",
+      summary: "AI feedback unavailable. (Parsing Error)",
       strengths: [],
       weak_points: [],
-      detailed_analysis: "",
-      feedback: ""
+      detailed_analysis: "The AI output could not be parsed. Please check the function logs for details.",
+      feedback: "The AI output could not be parsed. Please check the function logs for details."
     };
   }
 }
@@ -216,6 +266,10 @@ function safeJson(text) {
 // Topic Detection Helper
 // ===========================================
 function detectTopic(questionText) {
+  if (typeof questionText !== 'string') {
+    return "Unknown/Malformed Question";
+  }
+
   const text = questionText.toLowerCase();
   if (text.includes("brake") || text.includes("stopping")) return "Braking";
   if (text.includes("engine") || text.includes("fuel") || text.includes("power")) return "Powertrain";
