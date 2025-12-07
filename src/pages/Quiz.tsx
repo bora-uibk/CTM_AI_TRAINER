@@ -1,24 +1,23 @@
 import React, { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
-import { Brain, Trophy, Loader, Clock, BookOpen, Check, Hash, Image as ImageIcon, Filter, RefreshCw } from 'lucide-react'
+import { Brain, CircleCheck as CheckCircle, Circle as XCircle, RotateCcw, Trophy, Loader, CircleAlert as AlertCircle, Clock, Settings, Play, Pause, FileText, Check, BookOpen, Square, SquareCheck as CheckSquare, Type, Hash } from 'lucide-react'
 
-// --- Types ---
+// 1. Define Question Interface
 interface QuizQuestion {
   id: string
   type: 'single_choice' | 'multi_choice' | 'input'
   question: string
   options: string[] 
-  // For logic, we store what the 'correct' value is (index or string value)
   correct_answer: string | number | number[] 
   explanation: string
-  image_path?: string | null 
+  difficulty: string
 }
 
 export default function Quiz() {
   const { user } = useAuth()
   
-  // --- State ---
+  // 2. State
   const [questions, setQuestions] = useState<QuizQuestion[]>([])
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0)
   const [selectedAnswer, setSelectedAnswer] = useState<any>(null)
@@ -29,58 +28,78 @@ export default function Quiz() {
   const [generating, setGenerating] = useState(false)
   const [showSettings, setShowSettings] = useState(true)
   
-  // Quiz Configuration
-  const [quizMode, setQuizMode] = useState<'official' | 'ai'>('official') 
+  // Settings State
   const [quizSettings, setQuizSettings] = useState({
-    questionCount: 10,
-    timeLimit: 15,
-    yearFilter: 'all', // 'all' or specific year
-    sourceFilter: 'all' // 'all' or specific event (FSG, FSN, etc)
+    questionCount: 5,
+    timeLimit: 10 // in minutes
   })
   
-  // Timer State
   const [timeRemaining, setTimeRemaining] = useState(0)
   const [quizStarted, setQuizStarted] = useState(false)
-  
-  // AI Context State
+  const [quizPaused, setQuizPaused] = useState(false)
+  const [aiFeedback, setAiFeedback] = useState('')
+  const [loadingFeedback, setLoadingFeedback] = useState(false)
   const [selectedDocuments, setSelectedDocuments] = useState<Set<string>>(new Set())
   const [availableDocuments, setAvailableDocuments] = useState<any[]>([])
 
-  // Computed Properties
   const currentQuestion = questions[currentQuestionIndex]
   const isLastQuestion = currentQuestionIndex === questions.length - 1
 
   // --- Effects ---
-
-  // Timer
   useEffect(() => {
     let interval: NodeJS.Timeout
-    if (quizStarted && timeRemaining > 0 && !showResult) {
+    if (quizStarted && !quizPaused && timeRemaining > 0) {
       interval = setInterval(() => {
         setTimeRemaining(prev => {
-           if (prev <= 1) {
-               handleFinishQuiz()
-               return 0
-           }
-           return prev - 1
+          if (prev <= 1) {
+            handleTimeUp()
+            return 0
+          }
+          return prev - 1
         })
       }, 1000)
     }
     return () => clearInterval(interval)
-  }, [quizStarted, timeRemaining, showResult])
+  }, [quizStarted, quizPaused, timeRemaining])
 
-  // Load Documents for AI mode
   useEffect(() => {
-    if (quizMode === 'ai') {
-        fetchDocuments()
-    }
-  }, [quizMode])
+    fetchDocuments()
+    const saved = localStorage.getItem('selectedDocuments')
+    if (saved) setSelectedDocuments(new Set(JSON.parse(saved)))
+  }, [])
 
   // --- Helpers ---
-
   const fetchDocuments = async () => {
-    const { data } = await supabase.from('documents').select('id, name')
-    setAvailableDocuments(data || [])
+    try {
+      const { data, error } = await supabase
+        .from('documents')
+        .select('*')
+        .order('created_at', { ascending: false })
+
+      if (error) throw error
+      
+      const validDocs = (data || []).filter(doc => 
+        doc.content && 
+        !doc.content.startsWith('[PDF Document:') && 
+        doc.content.length > 100
+      )
+      setAvailableDocuments(validDocs)
+    } catch (error) {
+      console.error('Error fetching documents:', error)
+    }
+  }
+
+  const toggleDocumentSelection = (docId: string) => {
+    const newSelected = new Set(selectedDocuments)
+    if (newSelected.has(docId)) newSelected.delete(docId)
+    else newSelected.add(docId)
+    setSelectedDocuments(newSelected)
+    localStorage.setItem('selectedDocuments', JSON.stringify(Array.from(newSelected)))
+  }
+
+  const handleRestart = () => {
+    setShowSettings(true)
+    resetQuiz()
   }
 
   const formatTime = (seconds: number) => {
@@ -89,214 +108,71 @@ export default function Quiz() {
     return `${mins}:${secs.toString().padStart(2, '0')}`
   }
 
-  // --- MAIN LOGIC: GENERATE QUIZ ---
+  const getScoreColor = () => {
+    const percentage = (score / questions.length) * 100
+    if (percentage >= 80) return 'text-green-600'
+    if (percentage >= 60) return 'text-yellow-600'
+    return 'text-red-600'
+  }
 
+  // --- Logic: Generate & Run Quiz ---
   const generateQuiz = async () => {
+    if (selectedDocuments.size === 0) {
+      alert("Please select at least one document.")
+      return
+    }
+    
+    // Basic validation
+    if (quizSettings.questionCount < 1) {
+        alert("Please request at least 1 question.");
+        return;
+    }
+
     setGenerating(true)
-    setQuestions([]) // Clear previous
     try {
-      let newQuestions: QuizQuestion[] = []
-
-      if (quizMode === 'ai') {
-        // --- AI MODE (Your existing logic) ---
-         if (selectedDocuments.size === 0) { 
-             alert("Please select at least one document for AI context."); 
-             setGenerating(false); 
-             return; 
-         }
-         
-         const { data, error } = await supabase.functions.invoke('generate-quiz', {
-            body: { 
-              count: quizSettings.questionCount,
-              selectedDocuments: Array.from(selectedDocuments)
-            }
-         })
-         if (error) throw error
-         newQuestions = data.questions || []
-      } 
-      else {
-        // --- OFFICIAL BANK MODE ---
-        let query = supabase.from('question_bank').select('*')
-        
-        // Apply Filters
-        if (quizSettings.yearFilter !== 'all') {
-            query = query.eq('year', parseInt(quizSettings.yearFilter))
+      const { data, error } = await supabase.functions.invoke('generate-quiz', {
+        body: { 
+          count: quizSettings.questionCount,
+          selectedDocuments: Array.from(selectedDocuments)
         }
-        if (quizSettings.sourceFilter !== 'all') {
-            query = query.eq('source_event', quizSettings.sourceFilter)
-        }
-
-        // Random Limit (Note: 'random' sort in Postgres can be slow on huge tables, but fine for <10k rows)
-        // Using a simple random sort strategy here
-        const { data, error } = await query.limit(quizSettings.questionCount)
-
-        if (error) throw error
-        if (!data || data.length === 0) {
-            alert("No questions found with these filters. Try adjusting them.")
-            setGenerating(false)
-            return
-        }
-
-        // Shuffle the results locally to ensure randomness if the DB query wasn't perfectly random
-        const shuffledData = data.sort(() => 0.5 - Math.random())
-
-        // Transform DB data to UI format
-        newQuestions = shuffledData.map((q: any) => {
-          // The 'options' column is JSONB. Structure: [{ "text": "...", "is_correct": boolean }]
-          // IMPORTANT: Check if options is a string (double-encoded) or object
-          let rawOptions = q.options
-          if (typeof rawOptions === 'string') {
-             try { rawOptions = JSON.parse(rawOptions) } catch(e) {}
-          }
-          
-          const opts = Array.isArray(rawOptions) ? rawOptions.map((o: any) => o.text) : []
-          
-          let correctVal: any = null
-
-          // Determine Correct Answer based on Type
-          if (q.type === 'single-choice') {
-             // Find index of is_correct: true
-             correctVal = Array.isArray(rawOptions) ? rawOptions.findIndex((o: any) => o.is_correct === true) : -1
-          } 
-          else if (q.type === 'multi_choice') {
-             // Find array of indices
-             correctVal = Array.isArray(rawOptions) 
-               ? rawOptions.map((o: any, idx: number) => o.is_correct ? idx : -1).filter((idx: number) => idx !== -1)
-               : []
-          } 
-          else {
-             // INPUT Types
-             // The correct answer is inside the options array as 'text'
-             const correctObj = Array.isArray(rawOptions) ? rawOptions.find((o: any) => o.is_correct === true) : null
-             correctVal = correctObj ? correctObj.text : ""
-          }
-
-          // Handle Image Path
-          // Data format: images: [{"img_id": 1, "path": "question/12_1.jpg"}]
-          let imgPath = null
-          let rawImages = q.images
-          if (typeof rawImages === 'string') {
-              try { rawImages = JSON.parse(rawImages) } catch(e) {}
-          }
-          
-          if (Array.isArray(rawImages) && rawImages.length > 0) {
-            imgPath = rawImages[0].path
-          }
-
-          return {
-            id: q.id,
-            // Map DB types to Frontend Types
-            type: (q.type === 'input-range' ? 'input' : q.type) as any, 
-            question: q.question_text,
-            options: opts,
-            correct_answer: correctVal,
-            explanation: q.explanation || "No explanation provided.",
-            difficulty: 'Hard',
-            image_path: imgPath
-          }
-        })
-      }
+      })
+      if (error) throw error
       
-      setQuestions(newQuestions)
-      resetQuiz(newQuestions.length)
+      setQuestions(data.questions || [])
+      resetQuiz(data.questions?.length || 0)
       setShowSettings(false)
-      startQuiz(newQuestions.length) // Auto-start
-
     } catch (error) {
       console.error(error)
-      alert("Failed to load quiz")
+      alert("Failed to generate quiz.")
     } finally {
       setGenerating(false)
     }
   }
 
-  // --- GAMEPLAY LOGIC ---
-
-  const resetQuiz = (count: number) => {
+  const resetQuiz = (qCount = 0) => {
     setCurrentQuestionIndex(0)
     setSelectedAnswer(null)
     setShowResult(false)
     setScore(0)
-    setAnswers(new Array(count).fill(null))
     setQuizStarted(false)
+    setQuizPaused(false)
+    setTimeRemaining(0)
+    setAiFeedback('')
+    setAnswers(new Array(qCount > 0 ? qCount : questions.length).fill(null))
   }
 
-  const startQuiz = (qCount: number) => {
+  const startQuiz = () => {
     setQuizStarted(true)
-    if(quizSettings.timeLimit > 0) {
-        setTimeRemaining(quizSettings.timeLimit * 60)
-    } else {
-        setTimeRemaining(9999) // Infinite
-    }
+    setTimeRemaining(quizSettings.timeLimit * 60)
   }
 
-  const handleFinishQuiz = () => {
-      setQuizStarted(false)
-      setShowResult(true)
+  const handleTimeUp = () => {
+    setQuizStarted(false)
+    setShowResult(true)
+    generateAIFeedback()
   }
 
-  const checkAnswer = (userAns: any, correctAns: any, type: string) => {
-    if (userAns === null || userAns === undefined) return false
-
-    if (type === 'single_choice') {
-        return Number(userAns) === Number(correctAns)
-    }
-    
-    if (type === 'multi_choice') {
-      const u = Array.isArray(userAns) ? userAns.sort().toString() : ''
-      const c = Array.isArray(correctAns) ? correctAns.sort().toString() : ''
-      return u === c
-    }
-
-    if (type === 'input') {
-      // Smart String/Number Comparison
-      const userStr = String(userAns).trim().replace(',', '.')
-      const correctStr = String(correctAns).trim().replace(',', '.')
-
-      // 1. Check Range (e.g. "11.7-12.1") from your data
-      if (correctStr.includes('-') && !isNaN(parseFloat(correctStr.split('-')[0]))) {
-         // This assumes the format "min-max"
-         const parts = correctStr.split('-').map(p => parseFloat(p.trim()))
-         if(parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
-             const userNum = parseFloat(userStr)
-             return !isNaN(userNum) && userNum >= parts[0] && userNum <= parts[1]
-         }
-      }
-
-      // 2. Check Numeric Tolerance (1%)
-      const uNum = parseFloat(userStr)
-      const cNum = parseFloat(correctStr)
-      if (!isNaN(uNum) && !isNaN(cNum)) {
-        // If it's a number, allow small floating point differences
-        // or a 1% margin of error for engineering calc
-        return Math.abs(uNum - cNum) <= (Math.abs(cNum) * 0.02) // 2% tolerance
-      }
-
-      // 3. Fallback String Match
-      return userStr.toLowerCase() === correctStr.toLowerCase()
-    }
-    return false
-  }
-
-  const handleNext = () => {
-    // Save Answer
-    const newAnswers = [...answers]
-    newAnswers[currentQuestionIndex] = selectedAnswer
-    setAnswers(newAnswers)
-
-    // Check Score
-    if (checkAnswer(selectedAnswer, currentQuestion.correct_answer, currentQuestion.type)) {
-      setScore(prev => prev + 1)
-    }
-
-    if (isLastQuestion) {
-      handleFinishQuiz()
-    } else {
-      setCurrentQuestionIndex(prev => prev + 1)
-      setSelectedAnswer(null)
-    }
-  }
-  
+  // --- Logic: Scoring ---
   const handleMultiChoiceSelect = (index: number) => {
     const current = (selectedAnswer as number[]) || []
     if (current.includes(index)) {
@@ -306,332 +182,472 @@ export default function Quiz() {
     }
   }
 
-  // --- RENDER HELPERS ---
+  const checkAnswer = (userAns: any, correctAns: any, type: string) => {
+    if (!userAns) return false
+    
+    if (type === 'single_choice') {
+      return Number(userAns) === Number(correctAns)
+    }
+    if (type === 'multi_choice') {
+      const u = Array.isArray(userAns) ? userAns.sort().toString() : ''
+      const c = Array.isArray(correctAns) ? correctAns.sort().toString() : ''
+      return u === c
+    }
+    if (type === 'input') {
+      return String(userAns).trim().toLowerCase() === String(correctAns).trim().toLowerCase()
+    }
+    return false
+  }
 
-  const renderQuestionInput = () => {
-    if (!currentQuestion) return null
+  const handleNext = () => {
+    if (selectedAnswer === null) return
+    if (Array.isArray(selectedAnswer) && selectedAnswer.length === 0) return
+    if (typeof selectedAnswer === 'string' && selectedAnswer.trim() === '') return
 
-    if (currentQuestion.type === 'input') {
-        return (
-          <div className="mt-6">
-            <label className="text-sm font-semibold text-gray-700">Your Calculation</label>
-            <input
-              type="text"
-              className="mt-2 block w-full p-4 text-lg border-2 border-gray-300 rounded-xl focus:border-primary-500 focus:ring-0 outline-none transition-colors"
-              placeholder="Enter value (e.g. 42.5)"
-              value={selectedAnswer || ''}
-              onChange={(e) => setSelectedAnswer(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleNext()}
-              autoFocus
-            />
-            <p className="text-xs text-gray-500 mt-2">
-                Use a dot (.) or comma (,) for decimals.
-            </p>
-          </div>
-        )
+    const newAnswers = [...answers]
+    newAnswers[currentQuestionIndex] = selectedAnswer
+    setAnswers(newAnswers)
+
+    if (checkAnswer(selectedAnswer, currentQuestion.correct_answer, currentQuestion.type)) {
+      setScore(prev => prev + 1)
     }
 
-    if (currentQuestion.type === 'single_choice') {
+    if (isLastQuestion) {
+      setQuizStarted(false)
+      setShowResult(true)
+      generateAIFeedback()
+    } else {
+      setCurrentQuestionIndex(prev => prev + 1)
+      setSelectedAnswer(null)
+    }
+  }
+
+  const generateAIFeedback = async () => {
+    setLoadingFeedback(true)
+    try {
+      const { data, error } = await supabase.functions.invoke('generate-feedback', {
+        body: {
+          questions,
+          answers,
+          score,
+          totalQuestions: questions.length,
+          mode: 'individual'
+        }
+      })
+      if (error) throw error
+      setAiFeedback(data.feedback || data.detailed_analysis || "Quiz completed.")
+    } catch (error) {
+      console.error(error)
+      setAiFeedback("Great job! (AI feedback unavailable)")
+    } finally {
+      setLoadingFeedback(false)
+    }
+  }
+
+  // --- UI: Render Input Types ---
+  const renderQuestionInput = () => {
+    const { type, options } = currentQuestion
+
+    if (type === 'single_choice') {
       return (
         <div className="space-y-3">
-          {currentQuestion.options.map((option, index) => (
+          {options.map((option, index) => (
             <button
               key={index}
               onClick={() => setSelectedAnswer(index)}
-              className={`w-full text-left p-4 border-2 rounded-xl transition-all duration-200 ${
-                selectedAnswer === index 
-                    ? 'border-primary-600 bg-primary-50 ring-1 ring-primary-600' 
-                    : 'border-gray-200 hover:border-primary-300 hover:bg-gray-50'
+              className={`w-full text-left p-4 border-2 rounded-xl transition-all duration-200 hover:shadow-md ${
+                selectedAnswer === index
+                  ? 'border-primary-600 bg-primary-50 shadow-sm'
+                  : 'border-gray-200 hover:border-primary-300 hover:bg-gray-50'
               }`}
             >
-              <div className="flex items-start">
-                  <span className={`inline-flex items-center justify-center w-6 h-6 mr-3 text-sm font-bold rounded-full border ${
-                      selectedAnswer === index ? 'bg-primary-600 text-white border-primary-600' : 'text-gray-500 border-gray-300'
-                  }`}>
-                      {String.fromCharCode(65 + index)}
-                  </span>
-                  <span className={selectedAnswer === index ? 'font-medium text-gray-900' : 'text-gray-700'}>
-                      {option}
-                  </span>
+              <div className="flex items-center">
+                <div className={`flex-shrink-0 w-8 h-8 rounded-full border-2 flex items-center justify-center mr-4 ${
+                   selectedAnswer === index ? 'border-primary-600 bg-primary-600 text-white' : 'border-gray-300 text-gray-500'
+                }`}>
+                  {String.fromCharCode(65 + index)}
+                </div>
+                <span className={`font-medium ${selectedAnswer === index ? 'text-primary-900' : 'text-gray-700'}`}>
+                  {option}
+                </span>
               </div>
             </button>
           ))}
         </div>
       )
     }
-    
-    if (currentQuestion.type === 'multi_choice') {
-        return (
-          <div className="space-y-3">
-            <p className="text-sm text-gray-500 font-medium uppercase tracking-wide mb-2">Select all that apply</p>
-            {currentQuestion.options.map((option, index) => {
-              const isSelected = (selectedAnswer as number[])?.includes(index)
-              return (
-                <button
-                  key={index}
-                  onClick={() => handleMultiChoiceSelect(index)}
-                  className={`w-full text-left p-4 border-2 rounded-xl transition-all duration-200 ${
-                    isSelected 
-                        ? 'border-primary-600 bg-primary-50' 
-                        : 'border-gray-200 hover:border-primary-300 hover:bg-gray-50'
-                  }`}
-                >
-                  <div className="flex items-center">
-                    <div className={`mr-3 ${isSelected ? 'text-primary-600' : 'text-gray-300'}`}>
-                       <div className={`w-6 h-6 border-2 rounded-md flex items-center justify-center ${isSelected ? 'bg-primary-600 border-primary-600' : 'border-gray-300'}`}>
-                           {isSelected && <Check className="w-4 h-4 text-white" />}
-                       </div>
-                    </div>
-                    <span className={isSelected ? 'font-medium text-gray-900' : 'text-gray-700'}>
-                      {option}
-                    </span>
+
+    if (type === 'multi_choice') {
+      return (
+        <div className="space-y-3">
+          <p className="text-sm text-gray-500 font-medium mb-2 uppercase tracking-wide">Select all that apply:</p>
+          {options.map((option, index) => {
+            const isSelected = (selectedAnswer as number[])?.includes(index)
+            return (
+              <button
+                key={index}
+                onClick={() => handleMultiChoiceSelect(index)}
+                className={`w-full text-left p-4 border-2 rounded-xl transition-all duration-200 hover:shadow-md ${
+                  isSelected
+                    ? 'border-primary-600 bg-primary-50 shadow-sm'
+                    : 'border-gray-200 hover:border-primary-300 hover:bg-gray-50'
+                }`}
+              >
+                <div className="flex items-center">
+                  <div className={`mr-4 ${isSelected ? 'text-primary-600' : 'text-gray-300'}`}>
+                    {isSelected ? <CheckSquare className="w-6 h-6" /> : <Square className="w-6 h-6" />}
                   </div>
-                </button>
-              )
-            })}
+                  <span className={`font-medium ${isSelected ? 'text-primary-900' : 'text-gray-700'}`}>
+                    {option}
+                  </span>
+                </div>
+              </button>
+            )
+          })}
+        </div>
+      )
+    }
+
+    if (type === 'input') {
+      return (
+        <div className="mt-6">
+          <label className="block text-sm font-bold text-gray-700 mb-2">
+            Enter your calculated value:
+          </label>
+          <div className="relative rounded-md shadow-sm">
+            <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+              <Type className="h-5 w-5 text-gray-400" />
+            </div>
+            <input
+              type="text"
+              className="block w-full rounded-lg border-2 border-gray-300 pl-10 py-3 text-lg focus:border-primary-500 focus:ring-primary-500 transition-colors"
+              placeholder="e.g., 12.34"
+              value={selectedAnswer || ''}
+              onChange={(e) => setSelectedAnswer(e.target.value)}
+              autoFocus
+            />
           </div>
-        )
-      }
-    
-    return null
+          <p className="mt-2 text-sm text-gray-500">
+            Type the exact number or string required by the question.
+          </p>
+        </div>
+      )
+    }
   }
 
-  // ==================== VIEWS ====================
+  // ==================== RENDER ====================
 
-  // 1. SETTINGS VIEW
+  // 1. SETTINGS (LOBBY)
   if (showSettings) {
     return (
       <div className="max-w-2xl mx-auto">
         <div className="text-center mb-8">
-            <h1 className="text-2xl font-bold text-gray-900">Start Quiz Session</h1>
-            <p className="text-gray-600 mt-1">Configure your training parameters</p>
+          <h1 className="text-xl sm:text-2xl font-bold text-gray-900">New Quiz Session</h1>
+          <p className="text-sm sm:text-base text-gray-600 mt-1">Configure your training parameters</p>
         </div>
-        
-        <div className="card p-6 md:p-8 space-y-8">
-            {/* Mode Selector */}
-            <div className="flex justify-center">
-                <div className="bg-gray-100 p-1 rounded-xl inline-flex relative">
-                    <div 
-                        className={`absolute top-1 bottom-1 w-1/2 bg-white rounded-lg shadow-sm transition-all duration-300 ease-in-out ${quizMode === 'ai' ? 'left-[4px] translate-x-full' : 'left-[4px]'}`}
-                        style={{ width: 'calc(50% - 4px)' }}
-                    />
-                    <button 
-                        onClick={() => setQuizMode('official')}
-                        className={`relative z-10 px-6 py-2.5 rounded-lg text-sm font-semibold transition-colors duration-300 ${quizMode === 'official' ? 'text-primary-700' : 'text-gray-500 hover:text-gray-700'}`}
-                    >
-                        Official Questions
-                    </button>
-                    <button 
-                        onClick={() => setQuizMode('ai')}
-                        className={`relative z-10 px-6 py-2.5 rounded-lg text-sm font-semibold transition-colors duration-300 ${quizMode === 'ai' ? 'text-primary-700' : 'text-gray-500 hover:text-gray-700'}`}
-                    >
-                        AI Generator
-                    </button>
+
+        <div className="card p-4 sm:p-6 space-y-4 sm:space-y-6">
+          
+          {/* Document Selection */}
+          <div>
+            <div className="flex items-center space-x-2 mb-3">
+              <BookOpen className="w-5 h-5 text-primary-600" />
+              <h3 className="text-sm sm:text-base font-medium text-gray-900">Select Knowledge Base</h3>
+            </div>
+            <div className="border-2 border-gray-200 rounded-lg overflow-hidden">
+              {availableDocuments.length === 0 ? (
+                <div className="p-3 sm:p-4 text-center text-gray-500 bg-gray-50 text-sm sm:text-base">
+                  No documents found. Go to "Documents" to upload content.
                 </div>
+              ) : (
+                <div className="max-h-40 sm:max-h-48 overflow-y-auto divide-y divide-gray-100 bg-gray-50">
+                  {availableDocuments.map((doc) => (
+                    <div
+                      key={doc.id}
+                      onClick={() => toggleDocumentSelection(doc.id)}
+                      className={`flex items-center space-x-3 p-3 cursor-pointer transition-colors hover:bg-white ${
+                        selectedDocuments.has(doc.id) ? 'bg-primary-50' : ''
+                      }`}
+                    >
+                      <div className={`w-5 h-5 rounded border flex items-center justify-center ${
+                        selectedDocuments.has(doc.id)
+                          ? 'bg-primary-600 border-primary-600 text-white'
+                          : 'border-gray-300 bg-white'
+                      }`}>
+                        {selectedDocuments.has(doc.id) && <Check className="w-3 h-3" />}
+                      </div>
+                      <span className={`text-sm font-medium truncate ${selectedDocuments.has(doc.id) ? 'text-primary-900' : 'text-gray-700'}`}>
+                        {doc.name}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* INPUTS: Manual Number Inputs */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
+            <div>
+              <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">
+                Question Count
+              </label>
+              <div className="relative">
+                <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+                  <Hash className="h-5 w-5 text-gray-400" />
+                </div>
+                <input
+                  type="number"
+                  min="1"
+                  max="50"
+                  value={quizSettings.questionCount}
+                  onChange={(e) => setQuizSettings(prev => ({ ...prev, questionCount: Math.max(1, parseInt(e.target.value) || 0) }))}
+                  className="input-field pl-10 w-full"
+                  placeholder="e.g. 5"
+                />
+              </div>
             </div>
 
-            {/* Official Mode Filters */}
-            {quizMode === 'official' && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-4 bg-blue-50 rounded-xl border border-blue-100">
-                    <div>
-                        <label className="block text-xs font-bold text-blue-800 uppercase mb-2">Source Event</label>
-                        <select 
-                            value={quizSettings.sourceFilter}
-                            onChange={(e) => setQuizSettings({...quizSettings, sourceFilter: e.target.value})}
-                            className="input-field w-full bg-white"
-                        >
-                            <option value="all">All Events</option>
-                            <option value="FSG">FS Germany</option>
-                            <option value="FSN">FS Netherlands</option>
-                            <option value="FSA">FS Austria</option>
-                            <option value="FS East">FS East</option>
-                            <option value="FSCH">FS Switzerland</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label className="block text-xs font-bold text-blue-800 uppercase mb-2">Year</label>
-                        <select 
-                            value={quizSettings.yearFilter}
-                            onChange={(e) => setQuizSettings({...quizSettings, yearFilter: e.target.value})}
-                            className="input-field w-full bg-white"
-                        >
-                            <option value="all">All Years</option>
-                            <option value="2025">2025</option>
-                            <option value="2024">2024</option>
-                            <option value="2023">2023</option>
-                            <option value="2022">2022</option>
-                            <option value="2021">2021</option>
-                        </select>
-                    </div>
+            <div>
+              <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">
+                Time Limit (Mins)
+              </label>
+              <div className="relative">
+                <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+                  <Clock className="h-5 w-5 text-gray-400" />
                 </div>
-            )}
-
-            {/* AI Mode Document Selector */}
-            {quizMode === 'ai' && (
-                <div className="space-y-3">
-                   <div className="flex items-center space-x-2">
-                      <BookOpen className="w-5 h-5 text-primary-600" />
-                      <h3 className="font-semibold text-gray-900">Select Knowledge Base</h3>
-                   </div>
-                   <div className="max-h-48 overflow-y-auto border-2 border-gray-200 rounded-xl divide-y divide-gray-100">
-                      {availableDocuments.length === 0 ? (
-                          <div className="p-4 text-center text-gray-500 text-sm">No documents found.</div>
-                      ) : (
-                          availableDocuments.map(doc => (
-                              <div key={doc.id} onClick={() => {
-                                  const next = new Set(selectedDocuments);
-                                  next.has(doc.id) ? next.delete(doc.id) : next.add(doc.id);
-                                  setSelectedDocuments(next);
-                              }} className={`p-3 flex items-center cursor-pointer hover:bg-gray-50 ${selectedDocuments.has(doc.id) ? 'bg-primary-50' : ''}`}>
-                                  <div className={`w-5 h-5 border rounded mr-3 flex items-center justify-center ${selectedDocuments.has(doc.id) ? 'bg-primary-600 border-primary-600' : 'border-gray-300'}`}>
-                                     {selectedDocuments.has(doc.id) && <Check className="w-3 h-3 text-white" />}
-                                  </div>
-                                  <span className="text-sm text-gray-700">{doc.name}</span>
-                              </div>
-                          ))
-                      )}
-                   </div>
-                </div>
-            )}
-
-            {/* Common Settings */}
-            <div className="grid grid-cols-2 gap-6">
-                <div>
-                    <label className="label">Question Count</label>
-                    <div className="relative">
-                        <Hash className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
-                        <input 
-                            type="number" min="1" max="50"
-                            value={quizSettings.questionCount}
-                            onChange={(e) => setQuizSettings({...quizSettings, questionCount: Number(e.target.value)})}
-                            className="input-field pl-10 w-full"
-                        />
-                    </div>
-                </div>
-                <div>
-                    <label className="label">Time Limit (Min)</label>
-                    <div className="relative">
-                        <Clock className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
-                        <input 
-                            type="number" min="0" max="180"
-                            value={quizSettings.timeLimit}
-                            onChange={(e) => setQuizSettings({...quizSettings, timeLimit: Number(e.target.value)})}
-                            className="input-field pl-10 w-full"
-                        />
-                    </div>
-                </div>
+                <input
+                  type="number"
+                  min="0"
+                  max="120"
+                  value={quizSettings.timeLimit}
+                  onChange={(e) => setQuizSettings(prev => ({ ...prev, timeLimit: Math.max(0, parseInt(e.target.value) || 0) }))}
+                  className="input-field pl-10 w-full"
+                  placeholder="e.g. 10"
+                />
+              </div>
             </div>
+          </div>
 
-            <button onClick={generateQuiz} disabled={generating} className="btn-primary w-full py-4 text-lg shadow-lg flex items-center justify-center space-x-2">
-                {generating ? <Loader className="w-6 h-6 animate-spin" /> : <Brain className="w-6 h-6" />}
-                <span>{generating ? 'Preparing Quiz...' : 'Start Quiz'}</span>
-            </button>
+          {/* Generate Button */}
+          <button
+            onClick={generateQuiz}
+            disabled={generating || selectedDocuments.size === 0}
+            className="btn-primary w-full py-3 text-base sm:text-lg shadow-sm flex justify-center items-center"
+          >
+            {generating ? (
+              <>
+                <Loader className="w-5 h-5 animate-spin mr-2" />
+                Creating Quiz...
+              </>
+            ) : (
+              <>
+                <Brain className="w-5 h-5 mr-2" />
+                Generate Quiz
+              </>
+            )}
+          </button>
         </div>
       </div>
     )
   }
 
-  // 2. RESULTS VIEW
-  if (showResult) {
-      return (
-          <div className="max-w-3xl mx-auto text-center py-8">
-              <div className="card p-8 mb-8">
-                  <div className="inline-flex p-4 bg-yellow-50 rounded-full mb-6">
-                      <Trophy className="w-12 h-12 text-yellow-600" />
-                  </div>
-                  <h1 className="text-3xl font-bold text-gray-900 mb-2">Quiz Completed!</h1>
-                  <div className="text-5xl font-bold text-primary-600 mb-4">{Math.round((score / questions.length) * 100)}%</div>
-                  <p className="text-gray-600 mb-8">You answered {score} out of {questions.length} correctly.</p>
-                  
-                  <div className="flex justify-center space-x-4">
-                      <button onClick={() => setShowSettings(true)} className="btn-primary px-8">New Session</button>
-                  </div>
-              </div>
-              
-              <div className="space-y-4 text-left">
-                  <h3 className="font-bold text-xl text-gray-800 ml-2">Review</h3>
-                  {questions.map((q, i) => {
-                      const correct = checkAnswer(answers[i], q.correct_answer, q.type);
-                      return (
-                          <div key={q.id} className={`card p-6 border-l-4 ${correct ? 'border-l-green-500' : 'border-l-red-500'}`}>
-                             <div className="flex justify-between items-start mb-2">
-                                <span className="text-xs font-bold text-gray-500 uppercase">Question {i+1}</span>
-                                {correct 
-                                    ? <span className="text-green-600 font-bold text-sm flex items-center"><Check className="w-4 h-4 mr-1"/> Correct</span> 
-                                    : <span className="text-red-600 font-bold text-sm">Incorrect</span>
-                                }
-                             </div>
-                             <p className="font-semibold text-gray-900 mb-4">{q.question}</p>
-                             
-                             {q.image_path && (
-                                <img src={`https://img.fs-quiz.eu/${q.image_path}`} className="h-32 object-contain mb-4 border rounded" />
-                             )}
-                             
-                             <div className="bg-gray-50 p-4 rounded-lg text-sm text-gray-700">
-                                <p><span className="font-bold">Correct Answer:</span> {
-                                    q.type === 'input' 
-                                        ? q.correct_answer 
-                                        : (Array.isArray(q.correct_answer) 
-                                            ? (q.correct_answer as number[]).map(idx => String.fromCharCode(65+idx)).join(', ') 
-                                            : String.fromCharCode(65 + (q.correct_answer as number)))
-                                }</p>
-                                {q.explanation && (
-                                    <p className="mt-2 pt-2 border-t border-gray-200"><span className="font-bold">Explanation:</span> {q.explanation}</p>
-                                )}
-                             </div>
-                          </div>
-                      )
-                  })}
-              </div>
-          </div>
-      )
+  // 2. LOADING
+  if (generating) {
+    return (
+      <div className="flex flex-col items-center justify-center h-64 text-center">
+        <Loader className="w-12 h-12 animate-spin text-primary-600 mb-4" />
+        <h2 className="text-base sm:text-lg font-semibold text-gray-900">Constructing Quiz...</h2>
+        <p className="text-sm sm:text-base text-gray-500 mt-2 max-w-md px-4">
+          Analyzing documents and generating questions...
+        </p>
+      </div>
+    )
   }
 
-  // 3. ACTIVE GAMEPLAY VIEW
+  // 3. START SCREEN
+  if (!quizStarted && !showResult) {
+    return (
+      <div className="max-w-2xl mx-auto text-center pt-4 sm:pt-8">
+        <div className="card py-8 sm:py-12">
+          <div className="mb-6 inline-flex p-4 bg-primary-50 rounded-full">
+            <Trophy className="w-10 h-10 sm:w-12 sm:h-12 text-primary-600" />
+          </div>
+          <h2 className="text-xl sm:text-2xl font-bold text-gray-900 mb-2">Quiz Ready!</h2>
+          <p className="text-sm sm:text-base text-gray-600 mb-6 sm:mb-8 px-4">
+            {questions.length} questions prepared. <br />
+            {quizSettings.timeLimit > 0 ? `${quizSettings.timeLimit} minute time limit.` : 'No time limit.'}
+          </p>
+          <button onClick={startQuiz} className="btn-primary px-8 sm:px-10 py-3 text-base sm:text-lg shadow-lg">
+            Start Now
+          </button>
+          <div className="mt-6">
+             <button onClick={() => setShowSettings(true)} className="text-sm text-gray-500 hover:text-gray-900 underline">
+               Change Settings
+             </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // 4. RESULTS
+  if (showResult) {
+    return (
+      <div className="max-w-4xl mx-auto pb-8 sm:pb-12">
+        <div className="text-center mb-8">
+          <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Quiz Results</h1>
+        </div>
+
+        <div className="card text-center mb-6 p-4 sm:p-6">
+          <div className="mb-6">
+            <Trophy className={`w-12 h-12 sm:w-16 sm:h-16 mx-auto mb-4 ${getScoreColor()}`} />
+            <h2 className={`text-2xl sm:text-4xl font-bold mb-2 ${getScoreColor()}`}>
+              {score} / {questions.length}
+            </h2>
+            <p className="text-sm sm:text-base text-gray-600">
+              {Math.round((score / questions.length) * 100)}% Correct
+            </p>
+          </div>
+
+          <div className="bg-blue-50 p-4 sm:p-5 rounded-lg text-left border border-blue-100">
+            <h3 className="text-sm font-bold text-blue-900 uppercase tracking-wide mb-2 flex items-center">
+              <Brain className="w-4 h-4 mr-2" />
+              AI Coach Feedback
+            </h3>
+            {loadingFeedback ? (
+              <div className="flex items-center py-2 text-blue-700">
+                <Loader className="w-4 h-4 animate-spin mr-2" />
+                <span className="text-sm sm:text-base">Analyzing performance...</span>
+              </div>
+            ) : (
+              <div className="prose prose-sm text-blue-800 whitespace-pre-wrap leading-relaxed text-sm sm:text-base">
+                {aiFeedback}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="space-y-3 sm:space-y-4">
+          <h3 className="font-semibold text-gray-900 px-1 text-base sm:text-lg">Detailed Review</h3>
+          {questions.map((q, i) => {
+            const userAns = answers[i]
+            const isCorrect = checkAnswer(userAns, q.correct_answer, q.type)
+            
+            return (
+              <div key={q.id} className={`p-4 sm:p-5 border-2 rounded-xl ${isCorrect ? 'border-green-200 bg-green-50' : 'border-red-200 bg-red-50'}`}>
+                <div className="flex items-start gap-3">
+                  <div className={`mt-1 flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center ${isCorrect ? 'bg-green-200 text-green-700' : 'bg-red-200 text-red-700'}`}>
+                    {isCorrect ? <Check className="w-4 h-4" /> : <span className="text-xs font-bold">✕</span>}
+                  </div>
+                  <div className="flex-1">
+                    <div className="mb-3">
+                        <span className="text-xs font-bold uppercase tracking-wider opacity-70 mb-1 block">
+                            {q.type.replace('_', ' ')}
+                        </span>
+                        <p className="font-bold text-gray-900 text-base sm:text-lg">
+                        {i + 1}. {q.question}
+                        </p>
+                    </div>
+                    
+                    {q.type === 'input' ? (
+                        <div className="bg-white/50 p-2 sm:p-3 rounded-lg mb-3 border border-gray-200">
+                            <p className="text-sm"><span className="font-bold text-gray-600">Your Answer:</span> <span className="font-mono">{userAns || "—"}</span></p>
+                            <p className="text-sm"><span className="font-bold text-gray-600">Correct Answer:</span> <span className="font-mono text-green-700">{q.correct_answer}</span></p>
+                        </div>
+                    ) : (
+                        <div className="space-y-1 sm:space-y-2 mb-4">
+                        {q.options?.map((opt, idx) => {
+                            let style = "bg-white text-gray-600 border-gray-200"
+                            const isUserSelected = Array.isArray(userAns) ? userAns.includes(idx) : userAns === idx
+                            const isActuallyCorrect = Array.isArray(q.correct_answer) 
+                                ? (q.correct_answer as number[]).includes(idx)
+                                : q.correct_answer === idx
+
+                            if (isActuallyCorrect) style = "bg-green-100 text-green-900 border-green-300 font-bold"
+                            else if (isUserSelected && !isActuallyCorrect) style = "bg-red-100 text-red-900 border-red-300 line-through"
+
+                            return (
+                                <div key={idx} className={`p-2 sm:p-3 rounded-lg border text-sm flex justify-between items-center ${style}`}>
+                                    <span>{String.fromCharCode(65 + idx)}. {opt}</span>
+                                    {isActuallyCorrect && <Check className="w-4 h-4" />}
+                                </div>
+                            )
+                        })}
+                        </div>
+                    )}
+                    
+                    <div className="text-sm text-gray-700 bg-white/60 p-2 sm:p-3 rounded border border-gray-200/50">
+                      <span className="font-bold text-gray-900 block mb-1">Explanation:</span>
+                      {q.explanation}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+
+        <div className="mt-8 flex justify-center">
+          <button onClick={handleRestart} className="btn-primary shadow-lg px-8 sm:px-10 py-3 text-base sm:text-lg rounded-full">
+            Start New Session
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  // 5. ACTIVE QUIZ
   return (
-    <div className="max-w-4xl mx-auto pt-6">
-        <div className="flex justify-between items-center mb-6">
-            <span className="text-sm font-bold text-gray-500 uppercase">Question {currentQuestionIndex + 1} of {questions.length}</span>
-            <div className={`flex items-center space-x-2 px-4 py-2 rounded-lg border ${timeRemaining < 60 ? 'bg-red-50 text-red-600 border-red-200 animate-pulse' : 'bg-white border-gray-200'}`}>
-                <Clock className="w-4 h-4" />
-                <span className="font-mono font-bold text-lg">{formatTime(timeRemaining)}</span>
-            </div>
+    <div className="max-w-4xl mx-auto pt-4 sm:pt-6">
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center mb-6 space-y-2 sm:space-y-0">
+        <span className="text-xs font-bold text-gray-500 uppercase tracking-wide">
+          Question {currentQuestionIndex + 1} of {questions.length}
+        </span>
+        {quizSettings.timeLimit > 0 && (
+          <div className={`flex items-center space-x-2 px-4 py-2 rounded-lg border ${
+             timeRemaining < 60 ? 'bg-red-50 border-red-200 text-red-600 animate-pulse' : 'bg-white border-gray-200 text-gray-700'
+          }`}>
+            <Clock className="w-4 h-4" />
+            <span className="font-mono font-bold text-base sm:text-lg">{formatTime(timeRemaining)}</span>
+          </div>
+        )}
+      </div>
+
+      <div className="w-full bg-gray-200 rounded-full h-2 mb-8">
+        <div 
+          className="bg-primary-600 h-2 rounded-full transition-all duration-300 ease-out"
+          style={{ width: `${((currentQuestionIndex + 1) / questions.length) * 100}%` }}
+        />
+      </div>
+
+      <div className="card p-4 sm:p-6 lg:p-8 shadow-lg">
+        <div className="mb-4">
+           <span className="inline-block px-3 py-1 rounded-full text-xs font-bold bg-gray-100 text-gray-600 uppercase tracking-wider">
+             {currentQuestion.type.replace('_', ' ')}
+           </span>
         </div>
         
-        {/* Progress Bar */}
-        <div className="w-full bg-gray-200 rounded-full h-1.5 mb-8">
-            <div className="bg-primary-600 h-1.5 rounded-full transition-all duration-300" style={{ width: `${((currentQuestionIndex + 1) / questions.length) * 100}%` }}></div>
+        <h2 className="text-lg sm:text-xl lg:text-2xl font-bold text-gray-900 mb-6 sm:mb-8 leading-snug">
+          {currentQuestion.question}
+        </h2>
+
+        {renderQuestionInput()}
+
+        <div className="mt-6 sm:mt-10 pt-4 sm:pt-6 border-t border-gray-100 flex justify-end">
+          <button
+            onClick={handleNext}
+            disabled={
+                selectedAnswer === null || 
+                (Array.isArray(selectedAnswer) && selectedAnswer.length === 0) || 
+                (typeof selectedAnswer === 'string' && selectedAnswer.trim() === '')
+            }
+            className="btn-primary px-6 sm:px-8 py-3 text-base sm:text-lg disabled:opacity-50 disabled:cursor-not-allowed transition-transform active:scale-95"
+          >
+            {isLastQuestion ? 'Submit Quiz' : 'Next Question'}
+          </button>
         </div>
-
-        <div className="card p-6 md:p-10 shadow-xl">
-            <h2 className="text-xl md:text-2xl font-bold text-gray-900 mb-6 leading-snug">
-                {currentQuestion.question}
-            </h2>
-
-            {/* --- IMAGE RENDERING --- */}
-            {currentQuestion.image_path && (
-                <div className="mb-8 flex justify-center bg-gray-50 p-4 rounded-xl border border-gray-100">
-                    <img 
-                        src={`https://img.fs-quiz.eu/${currentQuestion.image_path}`} 
-                        alt="Question Diagram"
-                        className="max-h-80 object-contain rounded"
-                        onError={(e) => (e.currentTarget.style.display = 'none')}
-                    />
-                </div>
-            )}
-
-            {renderQuestionInput()}
-
-            <div className="mt-10 pt-6 border-t border-gray-100 flex justify-end">
-                <button 
-                    onClick={handleNext} 
-                    className="btn-primary px-8 py-3 text-lg"
-                    disabled={selectedAnswer === null || (typeof selectedAnswer === 'string' && selectedAnswer.trim() === '')}
-                >
-                    {isLastQuestion ? 'Finish Quiz' : 'Next Question'}
-                </button>
-            </div>
-        </div>
+      </div>
     </div>
   )
 }
