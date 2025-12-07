@@ -27,7 +27,7 @@ import {
 // 1. Define Question Interface
 interface QuizQuestion {
   id: string
-  type: 'single_choice' | 'multi_choice' | 'input'
+  type: 'single-choice' | 'multi_choice' | 'input'
   question: string
   options: string[] 
   correct_answer: string | number | number[] 
@@ -310,7 +310,7 @@ export default function Quiz() {
   const checkAnswer = (userAns: any, correctAns: any, type: string) => {
     if (userAns === null || userAns === undefined) return false
     
-    if (type === 'single_choice') {
+    if (type === 'single-choice') {
       return Number(userAns) === Number(correctAns)
     }
     if (type === 'multi_choice') {
@@ -399,7 +399,7 @@ export default function Quiz() {
   const renderQuestionInput = () => {
     const { type, options } = currentQuestion
 
-    if (type === 'single_choice') {
+    if (type === 'single-choice') {
       return (
         <div className="space-y-3">
           {options.map((option, index) => (
