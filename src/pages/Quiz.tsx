@@ -27,7 +27,7 @@ import {
 // 1. Define Question Interface
 interface QuizQuestion {
   id: string
-  type: 'single-choice' | 'multi_choice' | 'input'
+  type: 'single-choice' | 'multi-choice' | 'input'
   question: string
   options: string[] 
   correct_answer: string | number | number[] 
@@ -223,7 +223,7 @@ export default function Quiz() {
            if (q.type === 'single-choice') {
                // Index of true
                correctVal = Array.isArray(rawOptions) ? rawOptions.findIndex((o: any) => o.is_correct === true) : 0;
-           } else if (q.type === 'multi_choice') {
+           } else if (q.type === 'multi-choice') {
                // Array of indices
                correctVal = Array.isArray(rawOptions) 
                    ? rawOptions.map((o: any, idx: number) => o.is_correct ? idx : -1).filter((i:number) => i !== -1)
@@ -313,7 +313,7 @@ export default function Quiz() {
     if (type === 'single-choice') {
       return Number(userAns) === Number(correctAns)
     }
-    if (type === 'multi_choice') {
+    if (type === 'multi-choice') {
       const u = Array.isArray(userAns) ? userAns.sort().toString() : ''
       const c = Array.isArray(correctAns) ? correctAns.sort().toString() : ''
       return u === c
@@ -428,7 +428,7 @@ export default function Quiz() {
       )
     }
 
-    if (type === 'multi_choice') {
+    if (type === 'multi-choice') {
       return (
         <div className="space-y-3">
           <p className="text-sm text-gray-500 font-medium mb-2 uppercase tracking-wide">Select all that apply:</p>
