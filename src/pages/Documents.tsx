@@ -299,6 +299,20 @@ export default function Documents() {
   }
 
   // --- NEW: Handle Question Bank Import ---
+   const cleanJsonString = (str: string) => {
+    return str
+      // 1. Remove Form Feed characters (The '' symbol showing in your logs)
+      .replace(/\f/g, '') 
+      // 2. Replace actual newlines/returns with spaces (fixes unescaped newlines in strings)
+      .replace(/[\r\n]+/g, ' ')
+      // 3. Fix corrupted "true"/"false" if they have weird spacing (common in OCR)
+      .replace(/:\s*true\s*}/g, ': true }')
+      .replace(/:\s*false\s*}/g, ': false }')
+      // 4. Remove any non-printable ASCII characters (except valid ones)
+      .replace(/[^\x20-\x7E\xA0-\xFF]/g, '')
+      .trim();
+  };
+
   const handleQuestionBankUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -307,60 +321,78 @@ export default function Documents() {
     setBankLog([]);
     setShowBankLogs(true);
     
-    // Helper logger
     const log = (msg: string) => setBankLog(prev => [...prev, msg]);
 
     try {
         log("Reading file...");
         const text = await file.text();
         
-        // 1. Split logic
-        log("Parsing content...");
+        log("Splitting content...");
         // Split by the word "QUIZ" followed by a space and a number
-        const parts = text.split(/QUIZ \d+/).filter(part => part.trim().length > 0);
+        // We capture the delimiter to know which quiz it is if needed
+        const parts = text.split(/QUIZ\s+\d+/).filter(part => part.trim().length > 10);
         
-        log(`Found ${parts.length} quiz blocks.`);
+        log(`Found ${parts.length} potential quiz blocks.`);
         
         let allQuestionsToInsert: any[] = [];
+        let successCount = 0;
+        let failCount = 0;
   
         for (let i = 0; i < parts.length; i++) {
-          let jsonStr = parts[i].trim();
+          let rawStr = parts[i];
+          
           try {
-            // Fix newlines that break JSON
-            jsonStr = jsonStr.replace(/(?:\r\n|\r|\n)/g, ' '); 
+            // Apply the robust cleaner
+            const cleanStr = cleanJsonString(rawStr);
             
-            const quiz = JSON.parse(jsonStr);
+            // Attempt parse
+            const quiz = JSON.parse(cleanStr);
+            
             const eventName = quiz.event && quiz.event[0] ? quiz.event[0].short_name : 'Unknown';
+            const quizYear = parseInt(quiz.year) || 0;
             
             // Map to our DB schema
             const quizQuestions = quiz.questions.map((q: any) => {
-               // Extract solution text safely
                const solText = q.solution && q.solution[0] ? q.solution[0].text : null;
                
+               // Fix the answer correctness map
+               // The DB expects options to be flexible, but let's normalize them
+               const normalizedOptions = q.answers?.map((a: any) => ({
+                 text: a.answer_text,
+                 is_correct: a.is_correct
+               })) || [];
+
                return {
                   external_id: q.question_id,
                   quiz_id: quiz.quiz_id,
-                  year: parseInt(quiz.year) || 0,
+                  year: quizYear,
                   class: quiz.class,
                   source_event: eventName,
-                  type: q.type, // 'single-choice', 'input', etc.
+                  type: q.type, 
                   question_text: q.text,
-                  options: q.answers, // JSONB array of options
-                  images: q.images,   // JSONB array of image paths
+                  options: normalizedOptions, 
+                  images: q.images || [], 
                   explanation: solText
                };
             });
             
             allQuestionsToInsert.push(...quizQuestions);
+            successCount++;
             
           } catch (e: any) {
-             console.error("Parse error block " + i, e);
-             log(`Warning: Failed to parse block ${i}: ${e.message.substring(0,50)}...`);
+             console.error(`Block ${i} failed. Preview: ${rawStr.substring(0, 50)}...`);
+             // log(`⚠️ Failed Block ${i}: ${e.message}`);
+             failCount++;
           }
         }
 
+        log(`Parsed ${successCount} quizzes. (${failCount} failed).`);
         log(`Prepared ${allQuestionsToInsert.length} questions for upload.`);
         
+        if (allQuestionsToInsert.length === 0) {
+            throw new Error("No questions could be parsed. The file format might be too corrupted.");
+        }
+
         // 2. Batch Upload
         const BATCH_SIZE = 50;
         for (let i = 0; i < allQuestionsToInsert.length; i += BATCH_SIZE) {
@@ -370,16 +402,16 @@ export default function Documents() {
             log(`Uploaded ${Math.min(i + BATCH_SIZE, allQuestionsToInsert.length)} / ${allQuestionsToInsert.length}`);
         }
 
-        log("Import Complete Successfully!");
+        log("✅ Import Complete Successfully!");
         showMessage('success', `Imported ${allQuestionsToInsert.length} questions to the Bank.`);
 
     } catch (error: any) {
         console.error(error);
-        log(`CRITICAL ERROR: ${error.message}`);
+        log(`🔥 CRITICAL ERROR: ${error.message}`);
         showMessage('error', "Import failed. Check logs.");
     } finally {
         setImportingBank(false);
-        event.target.value = ''; // Reset input
+        event.target.value = ''; 
     }
   }
 
