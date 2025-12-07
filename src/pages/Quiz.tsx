@@ -27,7 +27,7 @@ import {
 // 1. Define Question Interface
 interface QuizQuestion {
   id: string
-  type: 'single-choice' | 'multi-choice' | 'input'
+  type: 'single-choice' | 'multi-choice' | 'input' | 'input-range'
   question: string
   options: string[] 
   correct_answer: string | number | number[] 
