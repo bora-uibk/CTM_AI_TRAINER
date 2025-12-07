@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
-import { Upload, FileText, Download, Trash2, Loader, CircleCheck as CheckCircle, CircleAlert as AlertCircle, Check, Settings } from 'lucide-react'
+import { Upload, FileText, Download, Trash2, Loader, CircleCheck as CheckCircle, CircleAlert as AlertCircle, Check, Settings, Database, FileJson, List } from 'lucide-react'
 
+// --- Existing Interface ---
 interface Document {
   id: string
   name: string
@@ -22,6 +23,8 @@ interface Message {
 
 export default function Documents() {
   const { user } = useAuth()
+  
+  // --- Existing State ---
   const [documents, setDocuments] = useState<Document[]>([])
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
@@ -30,12 +33,17 @@ export default function Documents() {
   const [selectedDocuments, setSelectedDocuments] = useState<Set<string>>(new Set())
   const [pdfLibReady, setPdfLibReady] = useState(false)
 
+  // --- New State for Question Bank ---
+  const [importingBank, setImportingBank] = useState(false)
+  const [bankLog, setBankLog] = useState<string[]>([])
+  const [showBankLogs, setShowBankLogs] = useState(false)
+
+  // --- Effects ---
   useEffect(() => {
     fetchDocuments()
     loadSelectedDocuments()
     
     // --- FIX: Load Stable PDF.js from CDN ---
-    // We load v3.11.174 which is robust and doesn't have the .mjs worker issues
     const script = window.document.createElement('script')
     script.src = '//cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js'
     script.async = true
@@ -53,6 +61,7 @@ export default function Documents() {
     }
   }, [])
 
+  // --- Existing Helpers ---
   const loadSelectedDocuments = () => {
     try {
       const saved = localStorage.getItem('selectedDocuments')
@@ -289,6 +298,92 @@ export default function Documents() {
     })
   }
 
+  // --- NEW: Handle Question Bank Import ---
+  const handleQuestionBankUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setImportingBank(true);
+    setBankLog([]);
+    setShowBankLogs(true);
+    
+    // Helper logger
+    const log = (msg: string) => setBankLog(prev => [...prev, msg]);
+
+    try {
+        log("Reading file...");
+        const text = await file.text();
+        
+        // 1. Split logic
+        log("Parsing content...");
+        // Split by the word "QUIZ" followed by a space and a number
+        const parts = text.split(/QUIZ \d+/).filter(part => part.trim().length > 0);
+        
+        log(`Found ${parts.length} quiz blocks.`);
+        
+        let allQuestionsToInsert: any[] = [];
+  
+        for (let i = 0; i < parts.length; i++) {
+          let jsonStr = parts[i].trim();
+          try {
+            // Fix newlines that break JSON
+            jsonStr = jsonStr.replace(/(?:\r\n|\r|\n)/g, ' '); 
+            
+            const quiz = JSON.parse(jsonStr);
+            const eventName = quiz.event && quiz.event[0] ? quiz.event[0].short_name : 'Unknown';
+            
+            // Map to our DB schema
+            const quizQuestions = quiz.questions.map((q: any) => {
+               // Extract solution text safely
+               const solText = q.solution && q.solution[0] ? q.solution[0].text : null;
+               
+               return {
+                  external_id: q.question_id,
+                  quiz_id: quiz.quiz_id,
+                  year: parseInt(quiz.year) || 0,
+                  class: quiz.class,
+                  source_event: eventName,
+                  type: q.type, // 'single-choice', 'input', etc.
+                  question_text: q.text,
+                  options: q.answers, // JSONB array of options
+                  images: q.images,   // JSONB array of image paths
+                  explanation: solText
+               };
+            });
+            
+            allQuestionsToInsert.push(...quizQuestions);
+            
+          } catch (e: any) {
+             console.error("Parse error block " + i, e);
+             log(`Warning: Failed to parse block ${i}: ${e.message.substring(0,50)}...`);
+          }
+        }
+
+        log(`Prepared ${allQuestionsToInsert.length} questions for upload.`);
+        
+        // 2. Batch Upload
+        const BATCH_SIZE = 50;
+        for (let i = 0; i < allQuestionsToInsert.length; i += BATCH_SIZE) {
+            const batch = allQuestionsToInsert.slice(i, i + BATCH_SIZE);
+            const { error } = await supabase.from('question_bank').insert(batch);
+            if(error) throw error;
+            log(`Uploaded ${Math.min(i + BATCH_SIZE, allQuestionsToInsert.length)} / ${allQuestionsToInsert.length}`);
+        }
+
+        log("Import Complete Successfully!");
+        showMessage('success', `Imported ${allQuestionsToInsert.length} questions to the Bank.`);
+
+    } catch (error: any) {
+        console.error(error);
+        log(`CRITICAL ERROR: ${error.message}`);
+        showMessage('error', "Import failed. Check logs.");
+    } finally {
+        setImportingBank(false);
+        event.target.value = ''; // Reset input
+    }
+  }
+
+  // --- Render ---
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -330,7 +425,7 @@ export default function Documents() {
         </div>
       )}
 
-      {/* Upload Section */}
+      {/* 1. Main Document Upload Section (RAG) */}
       <div className="card">
         <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 sm:p-8 text-center hover:border-primary-400 transition-colors">
           <Upload className="w-10 h-10 sm:w-12 sm:h-12 text-gray-400 mx-auto mb-4" />
@@ -368,7 +463,54 @@ export default function Documents() {
         </div>
       </div>
 
-      {/* Documents List */}
+      {/* 2. Official Question Bank Import Section */}
+      <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 sm:p-5">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="flex items-start space-x-3">
+                <div className="p-2 bg-blue-100 rounded-lg text-blue-600">
+                    <Database className="w-6 h-6" />
+                </div>
+                <div>
+                    <h3 className="font-semibold text-gray-900">Official Question Bank Import</h3>
+                    <p className="text-sm text-gray-500">Import raw JSON data (text file) from FS Quiz archives.</p>
+                </div>
+            </div>
+            
+            <div className="flex items-center gap-2 w-full sm:w-auto">
+                 {bankLog.length > 0 && (
+                     <button 
+                        onClick={() => setShowBankLogs(!showBankLogs)}
+                        className="text-gray-500 hover:text-gray-700 p-2"
+                        title="Show Logs"
+                     >
+                         <List className="w-5 h-5" />
+                     </button>
+                 )}
+                 <label className={`btn-secondary cursor-pointer flex items-center justify-center px-4 py-2 w-full sm:w-auto ${importingBank ? 'opacity-50 pointer-events-none' : ''}`}>
+                    {importingBank ? <Loader className="w-4 h-4 animate-spin mr-2" /> : <FileJson className="w-4 h-4 mr-2" />}
+                    {importingBank ? "Importing..." : "Import .txt File"}
+                    <input 
+                        type="file" 
+                        accept=".txt,.json" 
+                        className="hidden" 
+                        onChange={handleQuestionBankUpload}
+                        disabled={importingBank}
+                    />
+                 </label>
+            </div>
+        </div>
+
+        {/* Import Logs Console */}
+        {showBankLogs && bankLog.length > 0 && (
+            <div className="mt-4 bg-gray-900 text-green-400 p-4 rounded-lg font-mono text-xs h-40 overflow-y-auto">
+                {bankLog.map((line, i) => (
+                    <div key={i} className="border-b border-gray-800 py-1">{line}</div>
+                ))}
+            </div>
+        )}
+      </div>
+
+      {/* 3. Documents List */}
       <div className="card">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-base sm:text-lg font-semibold text-gray-900">
