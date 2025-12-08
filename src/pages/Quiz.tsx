@@ -221,7 +221,13 @@ export default function Quiz() {
            let correctVal: any = null;
 
            if (normalizedType === 'single_choice') {
-               correctVal = Array.isArray(rawOptions) ? rawOptions.findIndex((o: any) => o.is_correct === true) : 0;
+               // Use loose equality (== true) to catch "true" strings or 1
+               correctVal = Array.isArray(rawOptions) 
+                ? rawOptions.findIndex((o: any) => o.is_correct == true) 
+                : 0;
+               // Fallback if not found
+               if (correctVal === -1) correctVal = 0; 
+           }
            } else if (normalizedType === 'multi_choice') {
                correctVal = Array.isArray(rawOptions) 
                    ? rawOptions.map((o: any, idx: number) => o.is_correct ? idx : -1).filter((i:number) => i !== -1)
