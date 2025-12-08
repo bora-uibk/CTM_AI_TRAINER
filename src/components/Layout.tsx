@@ -9,7 +9,8 @@ import {
   Trophy,
   Menu,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  Crown
 } from 'lucide-react'
 
 interface LayoutProps {
@@ -19,7 +20,7 @@ interface LayoutProps {
 }
 
 export default function Layout({ children, currentPage, onPageChange }: LayoutProps) {
-  const { user, signOut } = useAuth()
+  const { user, signOut, isAdmin } = useAuth()
   
   // Default to true (open), we will adjust in useEffect for mobile
   const [sidebarOpen, setSidebarOpen] = React.useState(true)
@@ -42,12 +43,19 @@ export default function Layout({ children, currentPage, onPageChange }: LayoutPr
     // return () => window.removeEventListener('resize', handleResize)
   }, [])
 
-  const navigation = [
-    { id: 'documents', name: 'Documents', icon: FileText },
+  const baseNavigation = [
     { id: 'chat', name: 'Q&A Chat', icon: MessageCircle },
     { id: 'quiz', name: 'Self Quiz', icon: Brain },
     { id: 'team', name: 'Team Challenge', icon: Users },
   ]
+  
+  const adminNavigation = [
+    { id: 'documents', name: 'Documents', icon: FileText },
+    ...baseNavigation,
+    { id: 'admin', name: 'Admin Panel', icon: Crown },
+  ]
+  
+  const navigation = isAdmin ? adminNavigation : baseNavigation
 
   const toggleSidebar = () => {
     setSidebarOpen(!sidebarOpen)
@@ -103,8 +111,9 @@ export default function Layout({ children, currentPage, onPageChange }: LayoutPr
               <div className="hidden md:flex flex-col items-end">
                 <span className="text-sm font-medium text-gray-700">
                   {user?.email?.split('@')[0]}
+                  {isAdmin && <Crown className="w-3 h-3 text-yellow-500 ml-1" />}
                 </span>
-                <span className="text-xs text-gray-500">Student</span>
+                <span className="text-xs text-gray-500">{isAdmin ? 'Administrator' : 'Student'}</span>
               </div>
               
               <div className="h-8 w-px bg-gray-200 hidden md:block"></div>

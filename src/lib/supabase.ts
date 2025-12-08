@@ -68,3 +68,11 @@ export interface QuizQuestion {
   explanation: string
   difficulty: 'easy' | 'medium' | 'hard'
 }
+
+export interface User {
+  id: string
+  email: string
+  is_admin: boolean
+  created_at: string
+  updated_at: string
+}

@@ -6,10 +6,11 @@ import Documents from './pages/Documents'
 import Chat from './pages/Chat'
 import Quiz from './pages/Quiz'
 import Team from './pages/Team'
+import Admin from './pages/Admin'
 import { Loader } from 'lucide-react'
 
 function AppContent() {
-  const { user, loading } = useAuth()
+  const { user, loading, isAdmin } = useAuth()
   const [currentPage, setCurrentPage] = useState('documents')
 
   if (loading) {
@@ -30,15 +31,17 @@ function AppContent() {
   const renderPage = () => {
     switch (currentPage) {
       case 'documents':
-        return <Documents />
+        return isAdmin ? <Documents /> : <div className="text-center py-12"><p className="text-gray-600">Access restricted to administrators</p></div>
       case 'chat':
         return <Chat />
       case 'quiz':
         return <Quiz />
       case 'team':
         return <Team />
+      case 'admin':
+        return <Admin />
       default:
-        return <Documents />
+        return isAdmin ? <Documents /> : <Chat />
     }
   }
 
