@@ -312,10 +312,13 @@ export default function Quiz() {
   // --- UPDATED CHECK ANSWER LOGIC ---
   const checkAnswer = (userAns: any, correctAns: any, type: string) => {
     if (userAns === null || userAns === undefined) return false
-    
-    if (type === 'single-choice') {
+
+    // CHANGE THIS: 'single_choice' -> 'single-choice'
+    if (type === 'single-choice') { 
       return Number(userAns) === Number(correctAns)
     }
+    
+    // CHANGE THIS: 'multi_choice' -> 'multi-choice'
     if (type === 'multi-choice') {
       const u = Array.isArray(userAns) ? userAns.sort().toString() : ''
       const c = Array.isArray(correctAns) ? correctAns.sort().toString() : ''
