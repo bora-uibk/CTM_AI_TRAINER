@@ -153,7 +153,7 @@ export default function Quiz() {
     }
 
     setGenerating(true)
-    setQuestions([]) 
+    setQuestions([]) // Clear UI
 
     try {
       let newQuestions: QuizQuestion[] = []
@@ -185,7 +185,8 @@ export default function Quiz() {
             query = query.eq('source_event', quizSettings.sourceFilter)
         }
 
-        const { data, error } = await query.limit(50) // Pool for shuffling
+        // Fetch a pool (50) to shuffle from
+        const { data, error } = await query.limit(50)
 
         if (error) throw error
         
@@ -195,11 +196,13 @@ export default function Quiz() {
             return
         }
 
+        // Shuffle AND Slice to the requested count
         const shuffledData = data
             .sort(() => 0.5 - Math.random())
             .slice(0, quizSettings.questionCount); 
 
         newQuestions = shuffledData.map((q: any) => {
+           // Parse Options if stringified
            let rawOptions = q.options;
            if (typeof rawOptions === 'string') {
                try { rawOptions = JSON.parse(rawOptions) } catch(e) {}
@@ -207,31 +210,33 @@ export default function Quiz() {
            
            const opts = Array.isArray(rawOptions) ? rawOptions.map((o: any) => o.text) : [];
 
-           // --- CRITICAL FIX: DO NOT NORMALIZE TO UNDERSCORE ---
-           // We use the DB type directly. 
-           // DB types are: 'single-choice', 'multi-choice', 'input', 'input-range'
-           
-           let currentType = q.type;
-           
-           // Determine Correct Answer
+           // --- NORMALIZE TYPE ---
+           // We force everything to underscores for internal consistency
+           let normalizedType = 'input'; 
+           if (q.type === 'single-choice' || q.type === 'single_choice') normalizedType = 'single_choice';
+           else if (q.type === 'multi-choice' || q.type === 'multi_choice') normalizedType = 'multi_choice';
+           else if (q.type === 'input' || q.type === 'input-range') normalizedType = 'input';
+
+           // Calculate Correct Answer Logic
            let correctVal: any = null;
 
-           if (currentType === 'single-choice') {
-               correctVal = Array.isArray(rawOptions) ? rawOptions.findIndex((o: any) => o.is_correct === true) : 0;
-           } else if (currentType === 'multi-choice') { // Note: DB uses multi-choice
+           if (normalizedType === 'single_choice') {
+               // Use loose equality (== true) to catch "true" strings or 1
+               correctVal = Array.isArray(rawOptions) 
+                ? rawOptions.findIndex((o: any) => o.is_correct == true) 
+                : 0;
+               // Fallback if not found
+               if (correctVal === -1) correctVal = 0;
+           } else if (normalizedType === 'multi_choice') {
                correctVal = Array.isArray(rawOptions) 
                    ? rawOptions.map((o: any, idx: number) => o.is_correct ? idx : -1).filter((i:number) => i !== -1)
                    : [];
            } else {
-               // Input types
                const correctObj = Array.isArray(rawOptions) ? rawOptions.find((o: any) => o.is_correct === true) : null;
                correctVal = correctObj ? correctObj.text : "";
-               // Simplify input-range to just 'input' for the UI logic if needed, 
-               // OR update renderQuestionInput to handle 'input-range'
-               if(currentType === 'input-range') currentType = 'input'; 
            }
 
-           // Image Handling
+           // Handle Images
            let imgPath = null;
            let rawImages = q.images;
            if (typeof rawImages === 'string') {
@@ -243,7 +248,7 @@ export default function Quiz() {
 
            return {
                id: q.id,
-               type: currentType, // Passes 'single-choice' or 'multi-choice' directly
+               type: normalizedType as any, // Now strictly 'single_choice' | 'multi_choice' | 'input'
                question: q.question_text,
                options: opts,
                correct_answer: correctVal,
@@ -307,13 +312,10 @@ export default function Quiz() {
   // --- UPDATED CHECK ANSWER LOGIC ---
   const checkAnswer = (userAns: any, correctAns: any, type: string) => {
     if (userAns === null || userAns === undefined) return false
-
-    // CHANGE THIS: 'single_choice' -> 'single-choice'
-    if (type === 'single-choice') { 
+    
+    if (type === 'single-choice') {
       return Number(userAns) === Number(correctAns)
     }
-    
-    // CHANGE THIS: 'multi_choice' -> 'multi-choice'
     if (type === 'multi-choice') {
       const u = Array.isArray(userAns) ? userAns.sort().toString() : ''
       const c = Array.isArray(correctAns) ? correctAns.sort().toString() : ''
