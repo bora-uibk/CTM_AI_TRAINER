@@ -11,7 +11,7 @@ import { Loader } from 'lucide-react'
 
 function AppContent() {
   const { user, loading, isAdmin } = useAuth()
-  const [currentPage, setCurrentPage] = useState('documents')
+  const [currentPage, setCurrentPage] = useState('Chat')
 
   if (loading) {
     return (
