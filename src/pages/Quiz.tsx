@@ -147,41 +147,37 @@ export default function Quiz() {
 
   // --- Logic: Generate & Run Quiz ---
   const generateQuiz = async () => {
-    // Basic validation
     if (quizSettings.questionCount < 1) {
         alert("Please request at least 1 question.");
         return;
     }
 
     setGenerating(true)
-    setQuestions([])
+    setQuestions([]) // Clear UI
 
     try {
+      let newQuestions: QuizQuestion[] = []
+
       if (quizMode === 'ai') {
-        // --- EXISTING AI LOGIC ---
-        if (selectedDocuments.size === 0) {
-          alert("Please select at least one document.")
-          setGenerating(false)
-          return
-        }
-
-        const { data, error } = await supabase.functions.invoke('generate-quiz', {
-          body: { 
-            count: quizSettings.questionCount,
-            selectedDocuments: Array.from(selectedDocuments)
-          }
-        })
-        if (error) throw error
-        
-        setQuestions(data.questions || [])
-        resetQuiz(data.questions?.length || 0)
-        setShowSettings(false)
-
-      } else {
-        // --- NEW OFFICIAL QUESTION BANK LOGIC ---
+         if (selectedDocuments.size === 0) { 
+             alert("Please select at least one document for AI context."); 
+             setGenerating(false); 
+             return; 
+         }
+         
+         const { data, error } = await supabase.functions.invoke('generate-quiz', {
+            body: { 
+              count: quizSettings.questionCount,
+              selectedDocuments: Array.from(selectedDocuments)
+            }
+         })
+         if (error) throw error
+         newQuestions = data.questions || []
+      } 
+      else {
+        // --- OFFICIAL MODE ---
         let query = supabase.from('question_bank').select('*')
         
-        // Apply Filters
         if (quizSettings.yearFilter !== 'all') {
             query = query.eq('year', parseInt(quizSettings.yearFilter))
         }
@@ -189,52 +185,53 @@ export default function Quiz() {
             query = query.eq('source_event', quizSettings.sourceFilter)
         }
 
-        // Fetch random questions
-        // Note: .order('random') is not standard Supabase syntax but works if you enabled the pg extension or just use simple fetching
-        // For standard Supabase, we can't easily do 'random' efficiently on big tables without RPC. 
-        // We will fetch and then shuffle in JS for now (limit is small).
-        const { data, error } = await query.limit(50) // Fetch a pool to shuffle from
+        // Fetch a pool (50) to shuffle from
+        const { data, error } = await query.limit(50)
 
         if (error) throw error
         
         if (!data || data.length === 0) {
-            alert("No questions found matching these filters. Try selecting 'All Years'.")
+            alert("No questions found matching these filters.")
             setGenerating(false)
             return
         }
 
-        // Shuffle and Slice
-        const shuffled = data.sort(() => 0.5 - Math.random()).slice(0, quizSettings.questionCount)
+        // Shuffle AND Slice to the requested count
+        const shuffledData = data
+            .sort(() => 0.5 - Math.random())
+            .slice(0, quizSettings.questionCount); 
 
-        // Map DB Schema to QuizQuestion Interface
-        const mappedQuestions: QuizQuestion[] = shuffled.map((q: any) => {
+        newQuestions = shuffledData.map((q: any) => {
+           // Parse Options if stringified
            let rawOptions = q.options;
-           // Handle potential double-encoded JSON or direct object
            if (typeof rawOptions === 'string') {
                try { rawOptions = JSON.parse(rawOptions) } catch(e) {}
            }
            
-           // Options for UI (Text array)
            const opts = Array.isArray(rawOptions) ? rawOptions.map((o: any) => o.text) : [];
 
-           // Calculate Correct Answer
+           // --- NORMALIZE TYPE ---
+           // We force everything to underscores for internal consistency
+           let normalizedType = 'input'; 
+           if (q.type === 'single-choice' || q.type === 'single_choice') normalizedType = 'single_choice';
+           else if (q.type === 'multi-choice' || q.type === 'multi_choice') normalizedType = 'multi_choice';
+           else if (q.type === 'input' || q.type === 'input-range') normalizedType = 'input';
+
+           // Calculate Correct Answer Logic
            let correctVal: any = null;
 
-           if (q.type === 'single-choice') {
-               // Index of true
+           if (normalizedType === 'single_choice') {
                correctVal = Array.isArray(rawOptions) ? rawOptions.findIndex((o: any) => o.is_correct === true) : 0;
-           } else if (q.type === 'multi-choice') {
-               // Array of indices
+           } else if (normalizedType === 'multi_choice') {
                correctVal = Array.isArray(rawOptions) 
                    ? rawOptions.map((o: any, idx: number) => o.is_correct ? idx : -1).filter((i:number) => i !== -1)
                    : [];
            } else {
-               // Input: The correct text string
                const correctObj = Array.isArray(rawOptions) ? rawOptions.find((o: any) => o.is_correct === true) : null;
                correctVal = correctObj ? correctObj.text : "";
            }
 
-           // Image Handling
+           // Handle Images
            let imgPath = null;
            let rawImages = q.images;
            if (typeof rawImages === 'string') {
@@ -246,24 +243,25 @@ export default function Quiz() {
 
            return {
                id: q.id,
-               type: (q.type === 'input-range' ? 'input' : q.type) as any,
+               type: normalizedType as any, // Now strictly 'single_choice' | 'multi_choice' | 'input'
                question: q.question_text,
                options: opts,
                correct_answer: correctVal,
-               explanation: q.explanation || "Official Solution",
+               explanation: q.explanation || "See official solution.",
                difficulty: 'Hard',
                image_path: imgPath
            }
         })
-
-        setQuestions(mappedQuestions)
-        resetQuiz(mappedQuestions.length)
-        setShowSettings(false)
       }
+      
+      setQuestions(newQuestions)
+      resetQuiz(newQuestions.length)
+      setShowSettings(false)
+      startQuiz(newQuestions.length)
 
     } catch (error) {
       console.error(error)
-      alert("Failed to generate quiz.")
+      alert("Failed to load quiz")
     } finally {
       setGenerating(false)
     }
@@ -397,94 +395,89 @@ export default function Quiz() {
 
   // --- UI: Render Input Types ---
   const renderQuestionInput = () => {
-    const { type, options } = currentQuestion
+    if (!currentQuestion) return null
 
-    if (type === 'single-choice') {
+    // Strictly check for normalized types
+    if (currentQuestion.type === 'single_choice') {
       return (
         <div className="space-y-3">
-          {options.map((option, index) => (
+          {currentQuestion.options.map((option, index) => (
             <button
               key={index}
               onClick={() => setSelectedAnswer(index)}
-              className={`w-full text-left p-4 border-2 rounded-xl transition-all duration-200 hover:shadow-md ${
-                selectedAnswer === index
-                  ? 'border-primary-600 bg-primary-50 shadow-sm'
-                  : 'border-gray-200 hover:border-primary-300 hover:bg-gray-50'
+              className={`w-full text-left p-4 border-2 rounded-xl transition-all duration-200 ${
+                selectedAnswer === index 
+                    ? 'border-primary-600 bg-primary-50 ring-1 ring-primary-600' 
+                    : 'border-gray-200 hover:border-primary-300 hover:bg-gray-50'
               }`}
             >
-              <div className="flex items-center">
-                <div className={`flex-shrink-0 w-8 h-8 rounded-full border-2 flex items-center justify-center mr-4 ${
-                   selectedAnswer === index ? 'border-primary-600 bg-primary-600 text-white' : 'border-gray-300 text-gray-500'
-                }`}>
-                  {String.fromCharCode(65 + index)}
-                </div>
-                <span className={`font-medium ${selectedAnswer === index ? 'text-primary-900' : 'text-gray-700'}`}>
-                  {option}
-                </span>
+              <div className="flex items-start">
+                  <span className={`inline-flex items-center justify-center w-6 h-6 mr-3 text-sm font-bold rounded-full border ${
+                      selectedAnswer === index ? 'bg-primary-600 text-white border-primary-600' : 'text-gray-500 border-gray-300'
+                  }`}>
+                      {String.fromCharCode(65 + index)}
+                  </span>
+                  <span className={selectedAnswer === index ? 'font-medium text-gray-900' : 'text-gray-700'}>
+                      {option}
+                  </span>
               </div>
             </button>
           ))}
         </div>
       )
     }
-
-    if (type === 'multi-choice') {
-      return (
-        <div className="space-y-3">
-          <p className="text-sm text-gray-500 font-medium mb-2 uppercase tracking-wide">Select all that apply:</p>
-          {options.map((option, index) => {
-            const isSelected = (selectedAnswer as number[])?.includes(index)
-            return (
-              <button
-                key={index}
-                onClick={() => handleMultiChoiceSelect(index)}
-                className={`w-full text-left p-4 border-2 rounded-xl transition-all duration-200 hover:shadow-md ${
-                  isSelected
-                    ? 'border-primary-600 bg-primary-50 shadow-sm'
-                    : 'border-gray-200 hover:border-primary-300 hover:bg-gray-50'
-                }`}
-              >
-                <div className="flex items-center">
-                  <div className={`mr-4 ${isSelected ? 'text-primary-600' : 'text-gray-300'}`}>
-                    {isSelected ? <CheckSquare className="w-6 h-6" /> : <Square className="w-6 h-6" />}
+    
+    if (currentQuestion.type === 'multi_choice') {
+        return (
+          <div className="space-y-3">
+            <p className="text-sm text-gray-500 font-medium uppercase tracking-wide mb-2">Select all that apply</p>
+            {currentQuestion.options.map((option, index) => {
+              const isSelected = (selectedAnswer as number[])?.includes(index)
+              return (
+                <button
+                  key={index}
+                  onClick={() => handleMultiChoiceSelect(index)}
+                  className={`w-full text-left p-4 border-2 rounded-xl transition-all duration-200 ${
+                    isSelected 
+                        ? 'border-primary-600 bg-primary-50' 
+                        : 'border-gray-200 hover:border-primary-300 hover:bg-gray-50'
+                  }`}
+                >
+                  <div className="flex items-center">
+                    <div className={`mr-3 ${isSelected ? 'text-primary-600' : 'text-gray-300'}`}>
+                       <div className={`w-6 h-6 border-2 rounded-md flex items-center justify-center ${isSelected ? 'bg-primary-600 border-primary-600' : 'border-gray-300'}`}>
+                           {isSelected && <Check className="w-4 h-4 text-white" />}
+                       </div>
+                    </div>
+                    <span className={isSelected ? 'font-medium text-gray-900' : 'text-gray-700'}>
+                      {option}
+                    </span>
                   </div>
-                  <span className={`font-medium ${isSelected ? 'text-primary-900' : 'text-gray-700'}`}>
-                    {option}
-                  </span>
-                </div>
-              </button>
-            )
-          })}
-        </div>
-      )
-    }
+                </button>
+              )
+            })}
+          </div>
+        )
+      }
 
-    if (type === 'input') {
-      return (
-        <div className="mt-6">
-          <label className="block text-sm font-bold text-gray-700 mb-2">
-            Enter your calculated value:
-          </label>
-          <div className="relative rounded-md shadow-sm">
-            <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
-              <Type className="h-5 w-5 text-gray-400" />
-            </div>
+    if (currentQuestion.type === 'input') {
+        return (
+          <div className="mt-6">
+            <label className="text-sm font-semibold text-gray-700">Your Answer</label>
             <input
               type="text"
-              className="block w-full rounded-lg border-2 border-gray-300 pl-10 py-3 text-lg focus:border-primary-500 focus:ring-primary-500 transition-colors"
-              placeholder="e.g., 12.34"
+              className="mt-2 block w-full p-4 text-lg border-2 border-gray-300 rounded-xl focus:border-primary-500 focus:ring-0 outline-none transition-colors"
+              placeholder="Type your answer..."
               value={selectedAnswer || ''}
               onChange={(e) => setSelectedAnswer(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleNext()}
               autoFocus
             />
           </div>
-          <p className="mt-2 text-sm text-gray-500">
-            Type the exact number or string required by the question. Use a dot or comma.
-          </p>
-        </div>
-      )
+        )
     }
+    
+    return <div className="text-red-500">Error: Unknown Question Type ({currentQuestion.type})</div>
   }
 
   // ==================== RENDER ====================
