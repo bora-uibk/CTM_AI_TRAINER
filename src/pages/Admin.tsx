@@ -1,22 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
-import { 
-  Users, 
-  Shield, 
-  ShieldOff, 
-  Trash2, 
-  Key, 
-  Loader, 
-  AlertCircle, 
-  CheckCircle, 
-  Crown,
-  Mail,
-  Calendar,
-  Search,
-  UserCheck,
-  UserX
-} from 'lucide-react'
+import { Users, Shield, ShieldOff, Trash2, Key, Loader, CircleAlert as AlertCircle, CircleCheck as CheckCircle, Crown, Mail, Calendar, Search, UserCheck, UserX } from 'lucide-react'
 import type { User } from '../lib/supabase'
 
 interface Message {
