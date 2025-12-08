@@ -153,7 +153,7 @@ export default function Quiz() {
     }
 
     setGenerating(true)
-    setQuestions([]) // Clear UI
+    setQuestions([]) 
 
     try {
       let newQuestions: QuizQuestion[] = []
@@ -185,8 +185,7 @@ export default function Quiz() {
             query = query.eq('source_event', quizSettings.sourceFilter)
         }
 
-        // Fetch a pool (50) to shuffle from
-        const { data, error } = await query.limit(50)
+        const { data, error } = await query.limit(50) // Pool for shuffling
 
         if (error) throw error
         
@@ -196,13 +195,11 @@ export default function Quiz() {
             return
         }
 
-        // Shuffle AND Slice to the requested count
         const shuffledData = data
             .sort(() => 0.5 - Math.random())
             .slice(0, quizSettings.questionCount); 
 
         newQuestions = shuffledData.map((q: any) => {
-           // Parse Options if stringified
            let rawOptions = q.options;
            if (typeof rawOptions === 'string') {
                try { rawOptions = JSON.parse(rawOptions) } catch(e) {}
@@ -210,33 +207,31 @@ export default function Quiz() {
            
            const opts = Array.isArray(rawOptions) ? rawOptions.map((o: any) => o.text) : [];
 
-           // --- NORMALIZE TYPE ---
-           // We force everything to underscores for internal consistency
-           let normalizedType = 'input'; 
-           if (q.type === 'single-choice' || q.type === 'single_choice') normalizedType = 'single_choice';
-           else if (q.type === 'multi-choice' || q.type === 'multi_choice') normalizedType = 'multi_choice';
-           else if (q.type === 'input' || q.type === 'input-range') normalizedType = 'input';
-
-           // Calculate Correct Answer Logic
+           // --- CRITICAL FIX: DO NOT NORMALIZE TO UNDERSCORE ---
+           // We use the DB type directly. 
+           // DB types are: 'single-choice', 'multi-choice', 'input', 'input-range'
+           
+           let currentType = q.type;
+           
+           // Determine Correct Answer
            let correctVal: any = null;
 
-           if (normalizedType === 'single_choice') {
-               // Use loose equality (== true) to catch "true" strings or 1
-               correctVal = Array.isArray(rawOptions) 
-                ? rawOptions.findIndex((o: any) => o.is_correct == true) 
-                : 0;
-               // Fallback if not found
-               if (correctVal === -1) correctVal = 0;
-           } else if (normalizedType === 'multi_choice') {
+           if (currentType === 'single-choice') {
+               correctVal = Array.isArray(rawOptions) ? rawOptions.findIndex((o: any) => o.is_correct === true) : 0;
+           } else if (currentType === 'multi-choice') { // Note: DB uses multi-choice
                correctVal = Array.isArray(rawOptions) 
                    ? rawOptions.map((o: any, idx: number) => o.is_correct ? idx : -1).filter((i:number) => i !== -1)
                    : [];
            } else {
+               // Input types
                const correctObj = Array.isArray(rawOptions) ? rawOptions.find((o: any) => o.is_correct === true) : null;
                correctVal = correctObj ? correctObj.text : "";
+               // Simplify input-range to just 'input' for the UI logic if needed, 
+               // OR update renderQuestionInput to handle 'input-range'
+               if(currentType === 'input-range') currentType = 'input'; 
            }
 
-           // Handle Images
+           // Image Handling
            let imgPath = null;
            let rawImages = q.images;
            if (typeof rawImages === 'string') {
@@ -248,7 +243,7 @@ export default function Quiz() {
 
            return {
                id: q.id,
-               type: normalizedType as any, // Now strictly 'single_choice' | 'multi_choice' | 'input'
+               type: currentType, // Passes 'single-choice' or 'multi-choice' directly
                question: q.question_text,
                options: opts,
                correct_answer: correctVal,
