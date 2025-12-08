@@ -72,7 +72,7 @@ export default function Layout({ children, currentPage, onPageChange }: LayoutPr
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
       {/* Header */}
-      <header className="bg-white shadow-sm border-b border-gray-200 z-30 sticky top-0">
+      <header className="bg-white shadow-sm border-b border-gray-200 z-40 sticky top-0">
         <div className="w-full px-3 sm:px-4 lg:px-6">
           <div className="flex justify-between items-center h-16">
             <div className="flex items-center gap-3 sm:gap-4">
