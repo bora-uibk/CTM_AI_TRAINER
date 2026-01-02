@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { supabase, TeamRoom, RoomParticipant, QuizQuestion } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
-import { Users, Plus, LogIn, Crown, UserCheck, Send, RotateCcw, Trophy, Loader, Clock, Play, Settings, CircleCheck as CheckCircle, Circle as XCircle, Timer, Target, Award, Trash2, Sparkles, SquareCheck as CheckSquare, Square, Type, Check } from 'lucide-react'
+import { Users, Plus, LogIn, Crown, UserCheck, Send, RotateCcw, Trophy, Loader, Clock, Play, Settings, CircleCheck as CheckCircle, Circle as XCircle, Timer, Target, Award, Trash2, Sparkles, SquareCheck as CheckSquare, Square, Type, Check, Brain, Database, Filter, BookOpen, FileText, Hash } from 'lucide-react'
 
 // Extended interface to handle owner_team_id
 interface GameQuestion extends QuizQuestion {
@@ -42,18 +42,27 @@ export default function Team() {
   const [selectedTeam, setSelectedTeam] = useState<number>(1)
   const [timeRemaining, setTimeRemaining] = useState(0)
   const [timerActive, setTimerActive] = useState(false)
+  
+  // Quiz Creation State (from Quiz.tsx)
+  const [quizMode, setQuizMode] = useState<'official' | 'ai'>('official')
+  const [generating, setGenerating] = useState(false)
   const [selectedDocuments, setSelectedDocuments] = useState<Set<string>>(new Set())
+  const [availableDocuments, setAvailableDocuments] = useState<any[]>([])
 
   // Settings
   const [roomSettings, setRoomSettings] = useState({
     numTeams: 2,
     questionsPerTeam: 10,
-    timePerQuestion: 60
+    timePerQuestion: 60,
+    // New Filters for Official Mode
+    yearFilter: 'all',
+    sourceFilter: 'all'
   })
 
   // --- Effects ---
   useEffect(() => {
     fetchRooms()
+    fetchDocuments()
     const saved = localStorage.getItem('selectedDocuments')
     if (saved) {
       setSelectedDocuments(new Set(JSON.parse(saved)))
@@ -97,6 +106,37 @@ export default function Team() {
   }, [timerActive, timeRemaining])
 
   // --- Data Fetching ---
+  const fetchDocuments = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('documents')
+        .select('*')
+        .order('created_at', { ascending: false })
+
+      if (error) throw error
+      
+      const validDocs = (data || []).filter(doc => 
+        doc.content && 
+        !doc.content.startsWith('[PDF Document:') && 
+        doc.content.length > 100
+      )
+      setAvailableDocuments(validDocs)
+    } catch (error) {
+      console.error('Error fetching documents:', error)
+    }
+  }
+
+  const toggleDocumentSelection = (docId: string) => {
+    const newSelected = new Set(selectedDocuments)
+    if (newSelected.has(docId)) {
+      newSelected.delete(docId)
+    } else {
+      newSelected.add(docId)
+    }
+    setSelectedDocuments(newSelected)
+    localStorage.setItem('selectedDocuments', JSON.stringify(Array.from(newSelected)))
+  }
+
   const fetchRooms = async () => {
     try {
       const { data, error } = await supabase
@@ -332,16 +372,108 @@ export default function Team() {
     if (!currentRoom || currentRoom.created_by !== user?.id) return
     setLoading(true)
     try {
-      const totalQuestions = 2 * currentRoom.questions_per_team
-      const { data, error } = await supabase.functions.invoke('generate-quiz', {
-        body: { count: totalQuestions, selectedDocuments: Array.from(selectedDocuments) }
-      })
-      if (error) throw error
+      let allQuestions: any[] = []
+
+      if (quizMode === 'ai') {
+        if (selectedDocuments.size === 0) {
+          alert("Please select at least one document for AI context.")
+          setLoading(false)
+          return
+        }
+        
+        const totalQuestions = 2 * currentRoom.questions_per_team
+        const { data, error } = await supabase.functions.invoke('generate-quiz', {
+          body: { 
+            count: totalQuestions, 
+            selectedDocuments: Array.from(selectedDocuments) 
+          }
+        })
+        if (error) throw error
+        allQuestions = data.questions || []
+      } else {
+        // Official Mode - Query question bank
+        let query = supabase.from('question_bank').select('*')
+        
+        if (roomSettings.yearFilter !== 'all') {
+          query = query.eq('year', parseInt(roomSettings.yearFilter))
+        }
+        if (roomSettings.sourceFilter !== 'all') {
+          query = query.eq('source_event', roomSettings.sourceFilter)
+        }
+
+        const { data, error } = await query.limit(100) // Get more for shuffling
+        if (error) throw error
+        
+        if (!data || data.length === 0) {
+          alert("No questions found matching these filters.")
+          setLoading(false)
+          return
+        }
+
+        // Shuffle and slice to get the required number
+        const totalQuestions = 2 * currentRoom.questions_per_team
+        const shuffledData = data
+          .sort(() => 0.5 - Math.random())
+          .slice(0, totalQuestions)
+
+        // Convert to our format
+        allQuestions = shuffledData.map((q: any) => {
+          let rawOptions = q.options
+          if (typeof rawOptions === 'string') {
+            try { rawOptions = JSON.parse(rawOptions) } catch(e) {}
+          }
+          
+          const opts = Array.isArray(rawOptions) ? rawOptions.map((o: any) => o.text) : []
+
+          // Normalize type
+          let normalizedType = 'input'
+          if (q.type === 'single-choice' || q.type === 'single_choice') normalizedType = 'single_choice'
+          else if (q.type === 'multi-choice' || q.type === 'multi_choice') normalizedType = 'multi_choice'
+          else if (q.type === 'input' || q.type === 'input-range') normalizedType = 'input'
+
+          // Calculate correct answer
+          let correctVal: any = null
+          if (normalizedType === 'single_choice') {
+            correctVal = Array.isArray(rawOptions) 
+              ? rawOptions.findIndex((o: any) => o.is_correct == true) 
+              : 0
+            if (correctVal === -1) correctVal = 0
+          } else if (normalizedType === 'multi_choice') {
+            correctVal = Array.isArray(rawOptions) 
+              ? rawOptions.map((o: any, idx: number) => o.is_correct ? idx : -1).filter((i:number) => i !== -1)
+              : []
+          } else {
+            const correctObj = Array.isArray(rawOptions) ? rawOptions.find((o: any) => o.is_correct === true) : null
+            correctVal = correctObj ? correctObj.text : ""
+          }
+
+          // Handle images
+          let imgPath = null
+          let rawImages = q.images
+          if (typeof rawImages === 'string') {
+            try { rawImages = JSON.parse(rawImages) } catch(e) {}
+          }
+          if (Array.isArray(rawImages) && rawImages.length > 0) {
+            imgPath = rawImages[0].path
+          }
+
+          return {
+            id: q.id,
+            type: normalizedType,
+            question: q.question_text,
+            options: opts,
+            correct_answer: correctVal,
+            explanation: q.explanation || "See official solution.",
+            difficulty: 'Hard',
+            image_path: imgPath
+          }
+        })
+      }
       
       const teamQuestions: Record<string, QuizQuestion[]> = {}
       const teamScores: Record<string, number> = { "1": 0, "2": 0 }
-      teamQuestions["1"] = data.questions.slice(0, currentRoom.questions_per_team)
-      teamQuestions["2"] = data.questions.slice(currentRoom.questions_per_team, totalQuestions)
+      teamQuestions["1"] = allQuestions.slice(0, currentRoom.questions_per_team)
+      teamQuestions["2"] = allQuestions.slice(currentRoom.questions_per_team, allQuestions.length)
       
       const firstQ = { ...teamQuestions["1"][0], owner_team_id: 1 }
 
@@ -864,15 +996,187 @@ export default function Team() {
             <div><h1 className="text-2xl font-bold">{currentRoom.name}</h1><p>Code: {currentRoom.code}</p></div>
             <div className="flex gap-2"><button onClick={leaveRoom} className="btn-secondary">Leave</button>{isRoomCreator && <button onClick={()=>deleteRoom(currentRoom.id)} className="btn-secondary text-red-600">Delete</button>}</div>
         </div>
-        <div className="grid md:grid-cols-2 gap-6">
-            <div className="card">
-                <h2 className="font-bold mb-4">Settings</h2>
-                <div className="space-y-2 text-sm">
-                    <div className="flex justify-between"><span>Questions/Team:</span><b>{currentRoom.questions_per_team}</b></div>
-                    <div className="flex justify-between"><span>Time:</span><b>{currentRoom.time_per_question}s</b></div>
-                </div>
-                {isRoomCreator && <button onClick={startGame} disabled={loading || participants.length < 2} className="btn-primary w-full mt-6">{loading ? <Loader className="animate-spin w-4 h-4 mx-auto"/> : 'Start Game'}</button>}
+        
+        {/* Quiz Configuration Section */}
+        {isRoomCreator && (
+          <div className="card space-y-6">
+            <h2 className="text-lg font-bold text-gray-900">Quiz Configuration</h2>
+            
+            {/* Mode Selector */}
+            <div className="flex justify-center">
+              <div className="bg-gray-100 p-1 rounded-lg flex space-x-1">
+                <button 
+                  onClick={() => setQuizMode('official')}
+                  className={`px-4 py-2 rounded-md text-sm font-semibold transition-all ${
+                    quizMode === 'official' ? 'bg-white shadow text-primary-700' : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  <div className="flex items-center">
+                    <Database className="w-4 h-4 mr-2" />
+                    Official Question Bank
+                  </div>
+                </button>
+                <button 
+                  onClick={() => setQuizMode('ai')}
+                  className={`px-4 py-2 rounded-md text-sm font-semibold transition-all ${
+                    quizMode === 'ai' ? 'bg-white shadow text-primary-700' : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  <div className="flex items-center">
+                    <Brain className="w-4 h-4 mr-2" />
+                    AI Generator
+                  </div>
+                </button>
+              </div>
             </div>
+            
+            {/* Official Mode Filters */}
+            {quizMode === 'official' && (
+              <div className="grid grid-cols-2 gap-4 p-4 bg-blue-50 rounded-xl border border-blue-100">
+                <div>
+                  <label className="block text-xs font-bold text-blue-800 uppercase tracking-wide mb-2 flex items-center">
+                    <Filter className="w-3 h-3 mr-1" /> Competition
+                  </label>
+                  <select 
+                    value={roomSettings.sourceFilter}
+                    onChange={(e) => setRoomSettings(prev => ({...prev, sourceFilter: e.target.value}))}
+                    className="input-field w-full bg-white text-sm"
+                  >
+                    <option value="all">All Events</option>
+                    <option value="FSG">FS Germany</option>
+                    <option value="FSN">FS Netherlands</option>
+                    <option value="FSA">FS Austria</option>
+                    <option value="FS East">FS East</option>
+                    <option value="FSCH">FS Switzerland</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-blue-800 uppercase tracking-wide mb-2 flex items-center">
+                    <Clock className="w-3 h-3 mr-1" /> Year
+                  </label>
+                  <select 
+                    value={roomSettings.yearFilter}
+                    onChange={(e) => setRoomSettings(prev => ({...prev, yearFilter: e.target.value}))}
+                    className="input-field w-full bg-white text-sm"
+                  >
+                    <option value="all">All Years</option>
+                    <option value="2025">2025</option>
+                    <option value="2024">2024</option>
+                    <option value="2023">2023</option>
+                    <option value="2022">2022</option>
+                    <option value="2021">2021</option>
+                  </select>
+                </div>
+              </div>
+            )}
+
+            {/* AI Mode Document Selector */}
+            {quizMode === 'ai' && (
+              <div>
+                <div className="flex items-center space-x-2 mb-3">
+                  <BookOpen className="w-5 h-5 text-primary-600" />
+                  <h3 className="text-base font-medium text-gray-900">Select Knowledge Base</h3>
+                </div>
+                <div className="border-2 border-gray-200 rounded-lg overflow-hidden">
+                  {availableDocuments.length === 0 ? (
+                    <div className="p-4 text-center text-gray-500 bg-gray-50">
+                      No documents found. Go to "Documents" to upload content.
+                    </div>
+                  ) : (
+                    <div className="max-h-48 overflow-y-auto divide-y divide-gray-100 bg-gray-50">
+                      {availableDocuments.map((doc) => (
+                        <div
+                          key={doc.id}
+                          onClick={() => toggleDocumentSelection(doc.id)}
+                          className={`flex items-center space-x-3 p-3 cursor-pointer transition-colors hover:bg-white ${
+                            selectedDocuments.has(doc.id) ? 'bg-primary-50' : ''
+                          }`}
+                        >
+                          <div className={`w-5 h-5 rounded border flex items-center justify-center ${
+                            selectedDocuments.has(doc.id)
+                              ? 'bg-primary-600 border-primary-600 text-white'
+                              : 'border-gray-300 bg-white'
+                          }`}>
+                            {selectedDocuments.has(doc.id) && <Check className="w-3 h-3" />}
+                          </div>
+                          <span className={`text-sm font-medium truncate ${selectedDocuments.has(doc.id) ? 'text-primary-900' : 'text-gray-700'}`}>
+                            {doc.name}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Common Settings */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">
+                  Questions per Team
+                </label>
+                <div className="relative">
+                  <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+                    <Hash className="h-5 w-5 text-gray-400" />
+                  </div>
+                  <input
+                    type="number"
+                    min="1"
+                    max="25"
+                    value={roomSettings.questionsPerTeam}
+                    onChange={(e) => setRoomSettings(prev => ({ ...prev, questionsPerTeam: Math.max(1, parseInt(e.target.value) || 0) }))}
+                    className="input-field pl-10 w-full"
+                    placeholder="e.g. 10"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">
+                  Time per Question (s)
+                </label>
+                <div className="relative">
+                  <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+                    <Clock className="h-5 w-5 text-gray-400" />
+                  </div>
+                  <select
+                    value={roomSettings.timePerQuestion}
+                    onChange={(e) => setRoomSettings(prev => ({ ...prev, timePerQuestion: parseInt(e.target.value) }))}
+                    className="input-field pl-10 w-full"
+                  >
+                    <option value={30}>30s</option>
+                    <option value={60}>60s</option>
+                    <option value={90}>90s</option>
+                    <option value={120}>120s</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex items-end">
+                <button 
+                  onClick={startGame} 
+                  disabled={loading || participants.length < 2 || (quizMode === 'ai' && selectedDocuments.size === 0)} 
+                  className="btn-primary w-full py-3 text-base shadow-sm flex justify-center items-center"
+                >
+                  {loading ? (
+                    <>
+                      <Loader className="w-5 h-5 animate-spin mr-2" />
+                      Starting...
+                    </>
+                  ) : (
+                    <>
+                      <Play className="w-5 h-5 mr-2" />
+                      Start Game
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        
+        <div className="grid md:grid-cols-2 gap-6">
             <div className="card">
                 <h2 className="font-bold mb-4">Players ({participants.length})</h2>
                 {[1, 2].map(t => (
@@ -881,6 +1185,23 @@ export default function Team() {
                         {participants.filter(p=>p.team_number===t).map(p=><div key={p.id} className="text-sm py-1">{p.user_email}</div>)}
                     </div>
                 ))}
+            </div>
+            <div className="card">
+                <h2 className="font-bold mb-4">Current Settings</h2>
+                <div className="space-y-2 text-sm">
+                    <div className="flex justify-between"><span>Mode:</span><b>{quizMode === 'official' ? 'Official Bank' : 'AI Generated'}</b></div>
+                    <div className="flex justify-between"><span>Questions/Team:</span><b>{roomSettings.questionsPerTeam}</b></div>
+                    <div className="flex justify-between"><span>Time per Question:</span><b>{roomSettings.timePerQuestion}s</b></div>
+                    {quizMode === 'official' && (
+                      <>
+                        <div className="flex justify-between"><span>Competition:</span><b>{roomSettings.sourceFilter}</b></div>
+                        <div className="flex justify-between"><span>Year:</span><b>{roomSettings.yearFilter}</b></div>
+                      </>
+                    )}
+                    {quizMode === 'ai' && (
+                      <div className="flex justify-between"><span>Documents:</span><b>{selectedDocuments.size} selected</b></div>
+                    )}
+                </div>
             </div>
         </div>
       </div>
@@ -942,10 +1263,6 @@ export default function Team() {
             {showCreateRoom ? (
                 <div className="space-y-3 sm:space-y-4 text-left">
                     <input type="text" placeholder="Room Name" value={roomName} onChange={e=>setRoomName(e.target.value)} className="input-field"/>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        <div><label className="text-xs text-gray-500">Questions</label><input type="number" className="input-field" value={roomSettings.questionsPerTeam} onChange={e=>setRoomSettings({...roomSettings, questionsPerTeam: +e.target.value})}/></div>
-                        <div><label className="text-xs text-gray-500">Time (s)</label><select className="input-field" value={roomSettings.timePerQuestion} onChange={e=>setRoomSettings({...roomSettings, timePerQuestion: +e.target.value})}>{[30,60,90,120].map(s=><option key={s} value={s}>{s}</option>)}</select></div>
-                    </div>
                     <div className="flex flex-col sm:flex-row gap-2"><button onClick={createRoom} className="btn-primary flex-1">Create</button><button onClick={()=>setShowCreateRoom(false)} className="btn-secondary">Cancel</button></div>
                 </div>
             ) : <button onClick={()=>setShowCreateRoom(true)} className="btn-primary">Create</button>}
