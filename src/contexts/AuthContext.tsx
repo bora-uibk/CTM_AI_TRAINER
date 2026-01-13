@@ -118,7 +118,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return { error: null }
     } catch (error) {
       console.error('Password reset error:', error)
-      return { error }
+      
+      // Check if it's a FunctionsHttpError with detailed error message
+      if (error && typeof error === 'object' && 'context' in error) {
+        const functionsError = error as any
+        if (functionsError.context?.body) {
+          try {
+            const errorBody = JSON.parse(functionsError.context.body)
+            return { error: { message: errorBody.error || 'Password reset failed' } }
+          } catch (parseError) {
+            // If JSON parsing fails, return the raw body as message
+            return { error: { message: functionsError.context.body } }
+          }
+        }
+      }
+      
+      // Fallback to generic error
+      return { error: { message: 'Password reset failed. Please try again.' } }
     }
   }
 
