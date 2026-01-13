@@ -10,6 +10,7 @@ export default function Auth() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [resetMessage, setResetMessage] = useState('')
+  const [signUpMessage, setSignUpMessage] = useState('')
 
   const { signIn, signUp, resetPassword } = useAuth()
 
@@ -18,6 +19,7 @@ export default function Auth() {
     setLoading(true)
     setError('')
     setResetMessage('')
+    setSignUpMessage('')
 
     try {
       let result
@@ -32,6 +34,13 @@ export default function Auth() {
         result = isSignUp 
           ? await signUp(email, password)
           : await signIn(email, password)
+        
+        if (isSignUp && !result.error) {
+          setSignUpMessage('Account created successfully! Please check your email to confirm your account before signing in.')
+          setIsSignUp(false)
+          setEmail('')
+          setPassword('')
+        }
       }
 
       if (result.error) {
@@ -81,6 +90,12 @@ export default function Auth() {
             </div>
           )}
 
+          {signUpMessage && (
+            <div className="mb-4 p-3 bg-success-50 border border-success-200 rounded-lg flex items-start space-x-2">
+              <div className="w-5 h-5 text-success-600 flex-shrink-0 mt-0.5">✓</div>
+              <span className="text-success-700 text-sm">{signUpMessage}</span>
+            </div>
+          )}
           {error && (
             <div className="mb-4 p-3 bg-danger-50 border border-danger-200 rounded-lg flex items-start space-x-2">
               <AlertCircle className="w-5 h-5 text-danger-600" />
