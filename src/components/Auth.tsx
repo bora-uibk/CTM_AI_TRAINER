@@ -1,5 +1,7 @@
 import React, { useState } from 'react'
 import { useAuth } from '../contexts/AuthContext'
+// Make sure to import your supabase client instance here
+import { supabase } from '../lib/supabaseClient' // <--- CHECK THIS PATH
 import { Trophy, Mail, Lock, CircleAlert as AlertCircle, ArrowLeft } from 'lucide-react'
 
 export default function Auth() {
@@ -12,7 +14,8 @@ export default function Auth() {
   const [resetMessage, setResetMessage] = useState('')
   const [signUpMessage, setSignUpMessage] = useState('')
 
-  const { signIn, signUp, resetPassword } = useAuth()
+  // We keep signIn/signUp from context, but we will bypass resetPassword to use custom logic
+  const { signIn, signUp } = useAuth()
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -22,32 +25,40 @@ export default function Auth() {
     setSignUpMessage('')
 
     try {
-      let result
       if (isResetPassword) {
-        result = await resetPassword(email)
-        if (!result.error) {
-          setResetMessage('Password reset email sent! Check your inbox.')
-          setIsResetPassword(false)
-          setEmail('')
-        }
+        // --- NEW LOGIC: Direct Supabase call with redirectTo ---
+        const { error } = await supabase.auth.resetPasswordForEmail(email, {
+          redirectTo: `${window.location.origin}/reset-password`
+        })
+
+        if (error) throw error
+
+        // Success handling
+        setResetMessage('Password reset email sent! Check your inbox.')
+        setIsResetPassword(false)
+        setEmail('')
+        
       } else {
-        result = isSignUp 
+        // --- EXISTING LOGIC: Sign In / Sign Up ---
+        const result = isSignUp 
           ? await signUp(email, password)
           : await signIn(email, password)
         
-        if (isSignUp && !result.error) {
+        if (result.error) {
+          throw result.error
+        }
+
+        if (isSignUp) {
           setSignUpMessage('Account created successfully! Please check your email to confirm your account before signing in.')
           setIsSignUp(false)
           setEmail('')
           setPassword('')
         }
       }
-
-      if (result.error) {
-        setError(result.error.message)
-      }
-    } catch (err) {
-      setError('An unexpected error occurred')
+    } catch (err: any) {
+      console.error('Auth Error:', err)
+      // Handle both Supabase error objects and generic errors
+      setError(err.message || 'An unexpected error occurred')
     } finally {
       setLoading(false)
     }
