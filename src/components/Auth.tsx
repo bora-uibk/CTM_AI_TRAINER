@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import { useAuth } from '../contexts/AuthContext'
 // Make sure to import your supabase client instance here
-import { supabase } from '../lib/supabaseClient' // <--- CHECK THIS PATH
+import { supabase } from '../lib/supabase' // <--- CHECK THIS PATH
 import { Trophy, Mail, Lock, CircleAlert as AlertCircle, ArrowLeft } from 'lucide-react'
 
 export default function Auth() {
