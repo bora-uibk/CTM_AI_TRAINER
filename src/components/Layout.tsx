@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react'
+import React, { useEffect, useState } from 'react'
 import { useAuth } from '../contexts/AuthContext'
 import { 
   MessageCircle, 
@@ -10,7 +10,8 @@ import {
   Menu,
   ChevronLeft,
   ChevronRight,
-  Crown
+  Crown,
+  X // Added for closing the QR modal
 } from 'lucide-react'
 
 interface LayoutProps {
@@ -23,7 +24,9 @@ export default function Layout({ children, currentPage, onPageChange }: LayoutPr
   const { user, signOut, isAdmin } = useAuth()
   
   // Default to true (open), we will adjust in useEffect for mobile
-  const [sidebarOpen, setSidebarOpen] = React.useState(true)
+  const [sidebarOpen, setSidebarOpen] = useState(true)
+  // State for the QR Code Modal
+  const [showQrModal, setShowQrModal] = useState(false)
 
   // Auto-collapse sidebar on mobile/tablet initialization
   useEffect(() => {
@@ -71,6 +74,38 @@ export default function Layout({ children, currentPage, onPageChange }: LayoutPr
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
+      
+      {/* --- QR CODE MODAL --- */}
+      {showQrModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+          {/* Backdrop */}
+          <div 
+            className="absolute inset-0 bg-gray-900/60 backdrop-blur-sm animate-in fade-in duration-300"
+            onClick={() => setShowQrModal(false)}
+          />
+          {/* Modal Content */}
+          <div className="relative bg-white rounded-2xl p-6 shadow-2xl max-w-sm w-full animate-in zoom-in duration-300">
+            <button 
+              onClick={() => setShowQrModal(false)}
+              className="absolute -top-12 right-0 p-2 text-white hover:text-gray-300 transition-colors"
+            >
+              <X className="w-8 h-8" />
+            </button>
+            <div className="text-center">
+              <h3 className="text-lg font-bold text-gray-900 mb-4">Access QR Code</h3>
+              <div className="bg-gray-50 p-4 rounded-xl border border-gray-100 shadow-inner">
+                <img 
+                  src="https://i.postimg.cc/fTFRQ7dX/Screenshot-2026-01-14-231030.png" 
+                  alt="QR Code"
+                  className="w-full h-auto rounded-lg mx-auto"
+                />
+              </div>
+              <p className="mt-4 text-sm text-gray-500">Scan to access student credentials</p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <header className="bg-white shadow-sm border-b border-gray-200 z-40 sticky top-0">
         <div className="w-full px-3 sm:px-4 lg:px-6">
@@ -83,7 +118,6 @@ export default function Layout({ children, currentPage, onPageChange }: LayoutPr
                 aria-label="Toggle navigation"
               >
                 {sidebarOpen ? (
-                  /* Show different icons based on open/close state logic */
                   <div className="flex items-center">
                     <ChevronLeft className="w-6 h-6 hidden md:block" />
                     <Menu className="w-6 h-6 md:hidden" />
@@ -146,8 +180,8 @@ export default function Layout({ children, currentPage, onPageChange }: LayoutPr
             fixed md:relative z-30 h-full bg-white border-r border-gray-200 
             transition-all duration-300 ease-in-out flex flex-col
             ${sidebarOpen 
-              ? 'translate-x-0 w-64' // Mobile Open & Desktop Open
-              : '-translate-x-full w-64 md:translate-x-0 md:w-20' // Mobile Closed (hidden) & Desktop Closed (Mini)
+              ? 'translate-x-0 w-64' 
+              : '-translate-x-full w-64 md:translate-x-0 md:w-20'
             }
           `}
         >
@@ -167,11 +201,10 @@ export default function Layout({ children, currentPage, onPageChange }: LayoutPr
                         ? 'bg-primary-50 text-primary-700 font-medium' 
                         : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
                       }
-                      ${!sidebarOpen && 'md:justify-center'} /* Center icons when collapsed */
+                      ${!sidebarOpen && 'md:justify-center'}
                     `}
-                    title={!sidebarOpen ? item.name : ''} // Tooltip for collapsed state
+                    title={!sidebarOpen ? item.name : ''}
                   >
-                    {/* Active Indicator Strip */}
                     {isActive && (
                       <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 bg-primary-600 rounded-r-full" />
                     )}
@@ -183,7 +216,6 @@ export default function Layout({ children, currentPage, onPageChange }: LayoutPr
                       `} 
                     />
                     
-                    {/* Text Label - Hides smoothly when collapsed */}
                     <span 
                       className={`
                         ml-3 whitespace-nowrap transition-all duration-300 origin-left
@@ -205,7 +237,6 @@ export default function Layout({ children, currentPage, onPageChange }: LayoutPr
                         z-50 whitespace-nowrap hidden md:block pointer-events-none
                       ">
                         {item.name}
-                        {/* Little arrow pointing left */}
                         <div className="absolute left-0 top-1/2 -translate-y-1/2 -ml-1 border-4 border-transparent border-r-gray-900" />
                       </div>
                     )}
@@ -223,7 +254,13 @@ export default function Layout({ children, currentPage, onPageChange }: LayoutPr
                 </div>
                 <div className={`transition-all duration-300 overflow-hidden ${!sidebarOpen && 'md:w-0 md:opacity-0 hidden'}`}>
                   <p className="text-sm font-medium text-gray-700 truncate max-w-[140px]">My Profile</p>
-                  <p className="text-xs text-gray-500">View Settings</p>
+                  {/* NEW "SHOW QR" CLICKABLE TEXT */}
+                  <button 
+                    onClick={() => setShowQrModal(true)}
+                    className="text-xs text-primary-600 hover:text-primary-700 font-semibold transition-colors flex items-center"
+                  >
+                    Show QR
+                  </button>
                 </div>
              </div>
           </div>
