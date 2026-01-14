@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { supabase, TeamRoom, RoomParticipant, QuizQuestion } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
-import { Users, Plus, LogIn, Crown, UserCheck, Send, RotateCcw, Trophy, Loader, Clock, Play, Settings, CircleCheck as CheckCircle, Circle as XCircle, Timer, Target, Award, Trash2, Sparkles, SquareCheck as CheckSquare, Square, Type, Check, Brain, Database, ListFilter as Filter, BookOpen, FileText, Hash } from 'lucide-react'
+import { Users, Plus, LogIn, Crown, UserCheck, Send, RotateCcw, Trophy, Loader, Clock, Play, Settings, CircleCheck as CheckCircle, Circle as XCircle, Timer, Target, Award, Trash2, Sparkles, SquareCheck as CheckSquare, Square, Type, Check, Brain, Database, Filter, BookOpen, FileText, Hash } from 'lucide-react'
 
 // Extended interface to handle owner_team_id
 interface GameQuestion extends QuizQuestion {
@@ -253,13 +253,6 @@ export default function Team() {
 
       if (error) throw error
 
-      // Ensure the room state reflects the correct settings
-      const roomWithSettings = {
-        ...data,
-        questions_per_team: roomSettings.questionsPerTeam,
-        time_per_question: roomSettings.timePerQuestion
-      }
-
       await supabase.from('room_participants').insert({
         room_id: data.id,
         user_id: user.id,
@@ -267,7 +260,7 @@ export default function Team() {
         team_number: 1
       })
 
-      setCurrentRoom(roomWithSettings)
+      setCurrentRoom(data)
       setShowCreateRoom(false)
       setRoomName('')
       fetchRooms()
@@ -378,11 +371,6 @@ export default function Team() {
   const startGame = async () => {
     if (!currentRoom || currentRoom.created_by !== user?.id) return
     setLoading(true)
-    
-    // Debug: Log the current room settings
-    console.log('🔍 Debug - currentRoom.questions_per_team:', currentRoom.questions_per_team)
-    console.log('🔍 Debug - roomSettings.questionsPerTeam:', roomSettings.questionsPerTeam)
-    
     try {
       let allQuestions: any[] = []
 
@@ -393,8 +381,7 @@ export default function Team() {
           return
         }
         
-        // Use roomSettings directly to ensure we get the user's selection
-        const totalQuestions = 2 * roomSettings.questionsPerTeam
+        const totalQuestions = 2 * currentRoom.questions_per_team
         const { data, error } = await supabase.functions.invoke('generate-quiz', {
           body: { 
             count: totalQuestions, 
@@ -424,8 +411,7 @@ export default function Team() {
         }
 
         // Shuffle and slice to get the required number
-        // Use roomSettings directly to ensure we get the user's selection
-        const totalQuestions = 2 * roomSettings.questionsPerTeam
+        const totalQuestions = 2 * currentRoom.questions_per_team
         const shuffledData = data
           .sort(() => 0.5 - Math.random())
           .slice(0, totalQuestions)
@@ -486,9 +472,8 @@ export default function Team() {
       
       const teamQuestions: Record<string, QuizQuestion[]> = {}
       const teamScores: Record<string, number> = { "1": 0, "2": 0 }
-      // Use roomSettings directly to ensure correct distribution
-      teamQuestions["1"] = allQuestions.slice(0, roomSettings.questionsPerTeam)
-      teamQuestions["2"] = allQuestions.slice(roomSettings.questionsPerTeam, allQuestions.length)
+      teamQuestions["1"] = allQuestions.slice(0, currentRoom.questions_per_team)
+      teamQuestions["2"] = allQuestions.slice(currentRoom.questions_per_team, allQuestions.length)
       
       const firstQ = { ...teamQuestions["1"][0], owner_team_id: 1 }
 
@@ -511,7 +496,7 @@ export default function Team() {
           current_question: firstQ
       } : null)
 
-      setTimeRemaining(roomSettings.timePerQuestion)
+      setTimeRemaining(currentRoom.time_per_question)
       setTimerActive(true)
     } catch (error: any) {
       alert(`Error: ${error.message}`)
