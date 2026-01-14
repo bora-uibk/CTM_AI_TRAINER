@@ -499,6 +499,8 @@ export default function Team() {
         current_turn_team_id: 1,
         current_question_index: 0,
         current_question: firstQ,
+        questions_per_team: roomSettings.questionsPerTeam, 
+        time_per_question: roomSettings.timePerQuestion
         current_answers: {},
         feedback: null
       }).eq('id', currentRoom.id)
