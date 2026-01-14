@@ -821,14 +821,14 @@ export default function Team() {
         {/* Status Bar */}
         <div className="card">
           <div className="flex flex-col sm:flex-row justify-between items-center">
-            <div className="flex space-x-6 text-center">
+            <div className="flex space-x-4 sm:space-x-6 text-center">
               <div><div className="text-2xl font-bold text-primary-600">Team {currentRoom.current_turn_team_id}</div><div className="text-sm text-gray-600">{isStealMode ? <span className="text-orange-500 font-bold">STEAL!</span> : 'Current Turn'}</div></div>
               <div><div className="text-2xl font-bold">{currentRoom.current_question_index + 1}/{currentRoom.questions_per_team}</div><div className="text-sm text-gray-600">Round</div></div>
             </div>
             {timeRemaining > 0 ? (
               <div className="flex items-center space-x-2 mt-4 sm:mt-0">
                 <Timer className={timeRemaining < 10 ? 'text-red-600' : 'text-primary-600'} />
-                <span className={`text-2xl font-mono font-bold ${timeRemaining < 10 ? 'text-red-600' : 'text-primary-600'}`}>{formatTime(timeRemaining)}</span>
+                <span className={`text-xl sm:text-2xl font-mono font-bold ${timeRemaining < 10 ? 'text-red-600' : 'text-primary-600'}`}>{formatTime(timeRemaining)}</span>
               </div>
             ) : <span className="text-red-600 font-bold mt-4 sm:mt-0">Time's Up!</span>}
           </div>
@@ -847,7 +847,7 @@ export default function Team() {
                      {!isUserTurn && <div className="mt-2 text-center p-2 bg-gray-100 rounded text-sm text-gray-600">Waiting for opponents...</div>}
                   </div>
 
-                  <h2 className="text-xl font-bold text-gray-900 mb-8">{currentQuestion.question}</h2>
+                  <h2 className="text-xl font-bold text-gray-900 mb-8 break-words">{currentQuestion.question}</h2>
 
                   {/* --- RENDER QUESTION TYPES --- */}
                   
@@ -868,7 +868,7 @@ export default function Team() {
                               }`}>
                                 {String.fromCharCode(65 + index)}
                               </div>
-                              <span className={`font-medium ${selectedAnswer === index ? 'text-primary-900' : 'text-gray-700'}`}>{option}</span>
+                              <span className={`font-medium break-words ${selectedAnswer === index ? 'text-primary-900' : 'text-gray-700'}`}>{option}</span>
                             </div>
                             {/* Teammate Dots */}
                             <div className="flex space-x-1">{teamAnswers.filter(a => a.answer === index).map((_, i) => <div key={i} className="w-2 h-2 bg-primary-500 rounded-full" />)}</div>
@@ -894,7 +894,7 @@ export default function Team() {
                                 <div className={`mr-4 ${isSelected ? 'text-primary-600' : 'text-gray-300'}`}>
                                   {isSelected ? <CheckSquare className="w-6 h-6" /> : <Square className="w-6 h-6" />}
                                 </div>
-                                <span className={`font-medium ${isSelected ? 'text-primary-900' : 'text-gray-700'}`}>{option}</span>
+                                <span className={`font-medium break-words ${isSelected ? 'text-primary-900' : 'text-gray-700'}`}>{option}</span>
                               </div>
                               {/* Teammate Dots */}
                               <div className="flex space-x-1">{teamAnswers.filter(a => Array.isArray(a.answer) && a.answer.includes(index)).map((_, i) => <div key={i} className="w-2 h-2 bg-primary-500 rounded-full" />)}</div>
@@ -987,7 +987,7 @@ export default function Team() {
                    <div key={p.id} className="flex justify-between items-center text-sm p-2 bg-gray-50 rounded">
                       <div className="flex items-center space-x-2">
                          {p.user_id === currentRoom.created_by && <Crown className="w-3 h-3 text-yellow-500"/>}
-                         <span className="truncate max-w-[120px]">{p.user_email}</span>
+                         <span className="truncate max-w-[120px] sm:max-w-[150px] lg:max-w-[180px]">{p.user_email}</span>
                       </div>
                       <div className="flex items-center space-x-2">
                         <span className="px-2 py-0.5 bg-gray-200 rounded text-xs">T{p.team_number}</span>
@@ -1128,7 +1128,7 @@ export default function Team() {
             )}
 
             {/* Common Settings */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
                 <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">
                   Questions per Team
