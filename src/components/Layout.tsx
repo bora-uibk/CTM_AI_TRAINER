@@ -100,7 +100,7 @@ export default function Layout({ children, currentPage, onPageChange }: LayoutPr
                   className="w-full h-auto rounded-lg mx-auto"
                 />
               </div>
-              <p className="mt-4 text-sm text-gray-500">Scan to access student credentials</p>
+              <p className="mt-4 text-sm text-gray-500">Scan to access trainer</p>
             </div>
           </div>
         </div>
