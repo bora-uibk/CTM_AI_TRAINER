@@ -253,7 +253,7 @@ export default function Layout({ children, currentPage, onPageChange }: LayoutPr
                   {user?.email?.charAt(0).toUpperCase()}
                 </div>
                 <div className={`transition-all duration-300 overflow-hidden ${!sidebarOpen && 'md:w-0 md:opacity-0 hidden'}`}>
-                  <p className="text-sm font-medium text-gray-700 truncate max-w-[140px]">My Profile</p>
+                  <p className="text-sm font-medium text-gray-700 truncate max-w-[140px]">User</p>
                   {/* NEW "SHOW QR" CLICKABLE TEXT */}
                   <button 
                     onClick={() => setShowQrModal(true)}
