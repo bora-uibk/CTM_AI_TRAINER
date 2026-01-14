@@ -253,6 +253,13 @@ export default function Team() {
 
       if (error) throw error
 
+      // Ensure the room state reflects the correct settings
+      const roomWithSettings = {
+        ...data,
+        questions_per_team: roomSettings.questionsPerTeam,
+        time_per_question: roomSettings.timePerQuestion
+      }
+
       await supabase.from('room_participants').insert({
         room_id: data.id,
         user_id: user.id,
@@ -260,7 +267,7 @@ export default function Team() {
         team_number: 1
       })
 
-      setCurrentRoom(data)
+      setCurrentRoom(roomWithSettings)
       setShowCreateRoom(false)
       setRoomName('')
       fetchRooms()
