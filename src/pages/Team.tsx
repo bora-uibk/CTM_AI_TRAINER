@@ -378,6 +378,11 @@ export default function Team() {
   const startGame = async () => {
     if (!currentRoom || currentRoom.created_by !== user?.id) return
     setLoading(true)
+    
+    // Debug: Log the current room settings
+    console.log('🔍 Debug - currentRoom.questions_per_team:', currentRoom.questions_per_team)
+    console.log('🔍 Debug - roomSettings.questionsPerTeam:', roomSettings.questionsPerTeam)
+    
     try {
       let allQuestions: any[] = []
 
@@ -388,7 +393,8 @@ export default function Team() {
           return
         }
         
-        const totalQuestions = 2 * currentRoom.questions_per_team
+        // Use roomSettings directly to ensure we get the user's selection
+        const totalQuestions = 2 * roomSettings.questionsPerTeam
         const { data, error } = await supabase.functions.invoke('generate-quiz', {
           body: { 
             count: totalQuestions, 
@@ -418,7 +424,8 @@ export default function Team() {
         }
 
         // Shuffle and slice to get the required number
-        const totalQuestions = 2 * currentRoom.questions_per_team
+        // Use roomSettings directly to ensure we get the user's selection
+        const totalQuestions = 2 * roomSettings.questionsPerTeam
         const shuffledData = data
           .sort(() => 0.5 - Math.random())
           .slice(0, totalQuestions)
@@ -479,8 +486,9 @@ export default function Team() {
       
       const teamQuestions: Record<string, QuizQuestion[]> = {}
       const teamScores: Record<string, number> = { "1": 0, "2": 0 }
-      teamQuestions["1"] = allQuestions.slice(0, currentRoom.questions_per_team)
-      teamQuestions["2"] = allQuestions.slice(currentRoom.questions_per_team, allQuestions.length)
+      // Use roomSettings directly to ensure correct distribution
+      teamQuestions["1"] = allQuestions.slice(0, roomSettings.questionsPerTeam)
+      teamQuestions["2"] = allQuestions.slice(roomSettings.questionsPerTeam, allQuestions.length)
       
       const firstQ = { ...teamQuestions["1"][0], owner_team_id: 1 }
 
@@ -503,7 +511,7 @@ export default function Team() {
           current_question: firstQ
       } : null)
 
-      setTimeRemaining(currentRoom.time_per_question)
+      setTimeRemaining(roomSettings.timePerQuestion)
       setTimerActive(true)
     } catch (error: any) {
       alert(`Error: ${error.message}`)
