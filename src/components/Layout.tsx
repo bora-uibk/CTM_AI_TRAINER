@@ -252,7 +252,7 @@ export default function Layout({ children, currentPage, onPageChange }: LayoutPr
                 <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-bold text-xs">
                   {user?.email?.charAt(0).toUpperCase()}
                 </div>
-                <div className={`transition-all duration-300 overflow-hidden ${!sidebarOpen && 'md:w-0 md:opacity-0 hidden'}`}>
+                <div className={`transition-all duration-300 overflow-hidden ${!sidebarOpen && 'md:w-0 md:opacity-0 md:hidden'}`}>
                   <p className="text-sm font-medium text-gray-700 truncate max-w-[140px]">User</p>
                   {/* NEW "SHOW QR" CLICKABLE TEXT */}
                   <button 
