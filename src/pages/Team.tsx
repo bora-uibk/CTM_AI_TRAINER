@@ -812,6 +812,480 @@ export default function Team() {
           <div><h1 className="text-2xl font-bold">{currentRoom.name}</h1><p>Code: <span className="font-mono font-bold">{currentRoom.code}</span></p></div>
           <div className="flex space-x-2">
             <button onClick={leaveRoom} className="btn-secondary">Leave</button>
+            <div className={`flex items-center space-x-2 px-4 py-2 rounded-lg font-mono text-xl font-bold ${timerActive && timeRemaining < 10 ? 'bg-red-100 text-red-600 animate-pulse' : 'bg-gray-100 text-gray-700'}`}>
+              <Clock className="w-5 h-5" />
+              <span>{formatTime(timeRemaining)}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Scoreboard */}
+        <div className="grid grid-cols-2 gap-4">
+          {[1, 2].map(teamNum => {
+            const isTurn = currentRoom.current_turn_team_id === teamNum
+            const score = currentRoom.team_scores?.[teamNum] || 0
+            return (
+              <div key={teamNum} className={`p-4 rounded-xl border-2 transition-all ${isTurn ? 'border-blue-500 bg-blue-50 shadow-md transform scale-105' : 'border-gray-200 bg-white opacity-80'}`}>
+                <div className="flex justify-between items-center mb-2">
+                  <h3 className="font-bold text-gray-700 flex items-center">
+                    <Users className="w-4 h-4 mr-2" /> Team {teamNum}
+                  </h3>
+                  {isTurn && <span className="text-xs bg-blue-500 text-white px-2 py-1 rounded-full animate-pulse">Playing</span>}
+                </div>
+                <div className="text-3xl font-black text-gray-900">{score}</div>
+              </div>
+            )
+          })}
+        </div>
+
+        {/* Question Card */}
+        <div className="card relative overflow-hidden">
+          {isStealMode && (
+            <div className="absolute top-0 left-0 right-0 bg-yellow-400 text-yellow-900 text-center py-1 font-bold text-sm uppercase tracking-wider flex items-center justify-center">
+              <RotateCcw className="w-4 h-4 mr-2" /> Steal Opportunity
+            </div>
+          )}
+          
+          <div className="mt-6 mb-6">
+            <div className="flex justify-between items-start mb-4">
+              <span className="inline-block px-3 py-1 bg-gray-100 rounded-full text-xs font-semibold text-gray-500 mb-2">
+                Question {currentRoom.current_question_index + 1} / {currentRoom.questions_per_team}
+              </span>
+              <span className={`text-xs font-bold px-2 py-1 rounded ${currentQuestion?.difficulty === 'Hard' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
+                {currentQuestion?.difficulty}
+              </span>
+            </div>
+
+            <h2 className="text-xl md:text-2xl font-bold text-gray-900 leading-relaxed">
+              {currentQuestion?.question}
+            </h2>
+
+            {currentQuestion?.image_path && (
+              <div className="mt-4 rounded-lg overflow-hidden border border-gray-200">
+                <img src={currentQuestion.image_path} alt="Question Diagram" className="w-full h-auto max-h-64 object-contain bg-gray-50" />
+              </div>
+            )}
+          </div>
+
+          {/* Answer Area */}
+          <div className="space-y-3">
+            {!isUserTurn ? (
+              <div className="text-center py-8 bg-gray-50 rounded-lg border border-gray-200 border-dashed">
+                <Users className="w-8 h-8 mx-auto text-gray-400 mb-2" />
+                <p className="text-gray-500 font-medium">Waiting for Team {currentRoom.current_turn_team_id}...</p>
+              </div>
+            ) : (
+              <>
+                {currentQuestion?.type === 'input' ? (
+                   <input
+                    type="text"
+                    disabled={hasAnswered}
+                    placeholder="Type your answer here..."
+                    className="w-full p-4 border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:ring-0 text-lg transition-colors"
+                    value={(selectedAnswer as string) || ''}
+                    onChange={(e) => setSelectedAnswer(e.target.value)}
+                  />
+                ) : (
+                  <div className="grid gap-3">
+                    {currentQuestion?.options?.map((option: string, idx: number) => {
+                      const isMulti = currentQuestion.type === 'multi_choice'
+                      const isSelected = isMulti 
+                        ? (selectedAnswer as number[])?.includes(idx)
+                        : selectedAnswer === idx
+
+                      return (
+                        <button
+                          key={idx}
+                          disabled={hasAnswered}
+                          onClick={() => {
+                            if (isMulti) handleMultiChoiceSelect(idx)
+                            else setSelectedAnswer(idx)
+                          }}
+                          className={`w-full p-4 rounded-lg border-2 text-left transition-all flex items-center justify-between group
+                            ${isSelected 
+                              ? 'border-blue-500 bg-blue-50 text-blue-700 font-medium' 
+                              : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50 text-gray-700'
+                            } ${hasAnswered ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        >
+                          <div className="flex items-center">
+                            <span className={`w-6 h-6 rounded flex items-center justify-center text-xs mr-3 border transition-colors
+                              ${isSelected ? 'bg-blue-500 border-blue-500 text-white' : 'bg-white border-gray-300 text-gray-500 group-hover:border-gray-400'}`}>
+                              {isMulti ? (isSelected ? <CheckSquare className="w-4 h-4"/> : <Square className="w-4 h-4"/>) : String.fromCharCode(65 + idx)}
+                            </span>
+                            {option}
+                          </div>
+                          {isSelected && <CheckCircle className="w-5 h-5 text-blue-500" />}
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+
+                {/* Consensus & Submit Footer */}
+                <div className="mt-6 pt-6 border-t border-gray-100 flex flex-col md:flex-row items-center justify-between gap-4">
+                  <div className="flex items-center space-x-2 text-sm text-gray-500">
+                    <div className="flex -space-x-2">
+                      {currentTeamMembers.map((m) => {
+                        const hasSub = currentRoom.current_answers?.[m.user_id]
+                        return (
+                           <div key={m.user_id} className={`w-8 h-8 rounded-full flex items-center justify-center border-2 border-white text-xs font-bold text-white
+                             ${hasSub ? 'bg-green-500' : 'bg-gray-300'}`} title={m.user_email}>
+                             {hasSub ? <Check className="w-4 h-4" /> : '...'}
+                           </div>
+                        )
+                      })}
+                    </div>
+                    <span>{teamAnswers.length}/{currentTeamMembers.length} answered</span>
+                  </div>
+
+                  <button
+                    onClick={submitAnswer}
+                    disabled={hasAnswered || selectedAnswer === null || (Array.isArray(selectedAnswer) && selectedAnswer.length === 0) || (typeof selectedAnswer === 'string' && !selectedAnswer.trim())}
+                    className={`btn-primary w-full md:w-auto px-8 py-3 flex items-center justify-center space-x-2 ${hasAnswered ? 'bg-gray-400 cursor-not-allowed' : ''}`}
+                  >
+                    <span>{hasAnswered ? 'Waiting for Consensus...' : 'Submit Answer'}</span>
+                    {!hasAnswered && <Send className="w-4 h-4" />}
+                  </button>
+                </div>
+                
+                {hasAnswered && !hasConsensus && teamAnswers.length === currentTeamMembers.length && (
+                   <div className="p-3 bg-red-50 text-red-600 rounded-md text-sm text-center flex items-center justify-center animate-pulse">
+                      <XCircle className="w-4 h-4 mr-2" />
+                      Team disagreement! Discuss and update answers.
+                   </div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // --- VIEW: LOBBY (DEFAULT) ---
+  return (
+    <div className="max-w-4xl mx-auto space-y-8 px-4 py-8">
+      <div className="text-center space-y-4">
+        <h1 className="text-4xl font-black text-gray-900 tracking-tight">Team Battle</h1>
+        <p className="text-xl text-gray-600 max-w-2xl mx-auto">
+          Compete in real-time. Collaborate with your team. Master the rules.
+        </p>
+      </div>
+
+      <div className="grid md:grid-cols-2 gap-6 max-w-2xl mx-auto">
+        {/* Create Room Card */}
+        <button 
+          onClick={() => setShowCreateRoom(true)}
+          className="group p-8 bg-white rounded-2xl shadow-sm border-2 border-gray-100 hover:border-blue-500 hover:shadow-md transition-all text-left"
+        >
+          <div className="w-12 h-12 bg-blue-100 rounded-xl flex items-center justify-center text-blue-600 mb-4 group-hover:scale-110 transition-transform">
+            <Plus className="w-6 h-6" />
+          </div>
+          <h2 className="text-xl font-bold text-gray-900 mb-2">Create Room</h2>
+          <p className="text-gray-500">Host a new game, configure settings, and invite players.</p>
+        </button>
+
+        {/* Join Room Card */}
+        <button 
+          onClick={() => setShowJoinRoom(true)}
+          className="group p-8 bg-white rounded-2xl shadow-sm border-2 border-gray-100 hover:border-purple-500 hover:shadow-md transition-all text-left"
+        >
+          <div className="w-12 h-12 bg-purple-100 rounded-xl flex items-center justify-center text-purple-600 mb-4 group-hover:scale-110 transition-transform">
+            <LogIn className="w-6 h-6" />
+          </div>
+          <h2 className="text-xl font-bold text-gray-900 mb-2">Join Room</h2>
+          <p className="text-gray-500">Enter a code to join an existing team lobby.</p>
+        </button>
+      </div>
+
+      {/* Active Rooms List */}
+      {rooms.length > 0 && (
+        <div className="mt-12">
+          <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center">
+            <Database className="w-5 h-5 mr-2 text-gray-400" /> Public Rooms
+          </h3>
+          <div className="grid md:grid-cols-3 gap-4">
+             {rooms.map(room => (
+               <div key={room.id} className="card hover:shadow-md transition-shadow cursor-pointer" onClick={() => { setRoomCode(room.code); joinRoom(); }}>
+                  <div className="flex justify-between items-start mb-2">
+                    <h4 className="font-bold truncate">{room.name}</h4>
+                    <span className={`px-2 py-0.5 rounded text-xs ${room.room_status === 'lobby' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
+                      {room.room_status}
+                    </span>
+                  </div>
+                  <div className="text-sm text-gray-500 flex items-center justify-between">
+                     <span>Host: Team {room.created_by === user?.id ? '(You)' : 'Leader'}</span>
+                     <span className="font-mono bg-gray-100 px-1 rounded">{room.code}</span>
+                  </div>
+               </div>
+             ))}
+          </div>
+        </div>
+      )}
+
+      {/* --- MODALS --- */}
+
+      {/* 1. Create Room Modal */}
+      {showCreateRoom && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
+            <h2 className="text-2xl font-bold mb-6">Create New Room</h2>
+            
+            <div className="space-y-6">
+              {/* Basic Info */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Room Name</label>
+                <input 
+                  value={roomName} onChange={e => setRoomName(e.target.value)} 
+                  className="input-field" placeholder="e.g. FS Austria Prep" 
+                />
+              </div>
+
+              {/* Game Settings Grid */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                 <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Questions per Team</label>
+                    <select 
+                      value={roomSettings.questionsPerTeam}
+                      onChange={e => setRoomSettings({...roomSettings, questionsPerTeam: parseInt(e.target.value)})}
+                      className="input-field"
+                    >
+                      <option value={5}>5 Questions</option>
+                      <option value={10}>10 Questions</option>
+                      <option value={15}>15 Questions</option>
+                    </select>
+                 </div>
+                 <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Time per Question</label>
+                    <select 
+                      value={roomSettings.timePerQuestion}
+                      onChange={e => setRoomSettings({...roomSettings, timePerQuestion: parseInt(e.target.value)})}
+                      className="input-field"
+                    >
+                      <option value={30}>30 Seconds</option>
+                      <option value={60}>60 Seconds</option>
+                      <option value={90}>90 Seconds</option>
+                      <option value={120}>2 Minutes</option>
+                    </select>
+                 </div>
+              </div>
+
+              <div className="border-t border-gray-100 my-4"></div>
+
+              {/* Question Source Selection */}
+              <div className="space-y-4">
+                <div className="flex space-x-4 p-1 bg-gray-100 rounded-lg">
+                  <button 
+                    onClick={() => setQuizMode('official')}
+                    className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-all ${quizMode === 'official' ? 'bg-white shadow text-blue-600' : 'text-gray-500'}`}
+                  >
+                    <div className="flex items-center justify-center"><Database className="w-4 h-4 mr-2"/>Official Bank</div>
+                  </button>
+                  <button 
+                    onClick={() => setQuizMode('ai')}
+                    className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-all ${quizMode === 'ai' ? 'bg-white shadow text-purple-600' : 'text-gray-500'}`}
+                  >
+                    <div className="flex items-center justify-center"><Brain className="w-4 h-4 mr-2"/>AI Generation</div>
+                  </button>
+                </div>
+
+                {quizMode === 'official' ? (
+                   <div className="grid grid-cols-2 gap-4 bg-gray-50 p-4 rounded-lg">
+                      <div>
+                        <label className="text-xs font-bold text-gray-500 uppercase">Year</label>
+                        <select 
+                          className="input-field mt-1 text-sm"
+                          value={roomSettings.yearFilter}
+                          onChange={(e) => setRoomSettings({...roomSettings, yearFilter: e.target.value})}
+                        >
+                          <option value="all">All Years</option>
+                          <option value="2024">2024</option>
+                          <option value="2023">2023</option>
+                          <option value="2022">2022</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-xs font-bold text-gray-500 uppercase">Event</label>
+                        <select 
+                          className="input-field mt-1 text-sm"
+                          value={roomSettings.sourceFilter}
+                          onChange={(e) => setRoomSettings({...roomSettings, sourceFilter: e.target.value})}
+                        >
+                          <option value="all">All Events</option>
+                          <option value="FSG">FS Germany</option>
+                          <option value="FSA">FS Austria</option>
+                          <option value="FSEast">FS East</option>
+                        </select>
+                      </div>
+                   </div>
+                ) : (
+                   <div className="bg-purple-50 p-4 rounded-lg border border-purple-100">
+                      <h4 className="text-sm font-bold text-purple-900 mb-2 flex items-center"><FileText className="w-4 h-4 mr-2"/> Select Context Documents</h4>
+                      <div className="max-h-32 overflow-y-auto space-y-2">
+                        {availableDocuments.map(doc => (
+                          <label key={doc.id} className="flex items-center space-x-2 text-sm text-gray-700 cursor-pointer hover:bg-purple-100 p-1 rounded">
+                             <input 
+                               type="checkbox" 
+                               checked={selectedDocuments.has(doc.id)} 
+                               onChange={() => toggleDocumentSelection(doc.id)}
+                               className="rounded text-purple-600 focus:ring-purple-500"
+                             />
+                             <span className="truncate">{doc.title}</span>
+                          </label>
+                        ))}
+                      </div>
+                      {availableDocuments.length === 0 && <p className="text-xs text-purple-600 mt-2">No documents found. Upload PDFs in the Library tab.</p>}
+                   </div>
+                )}
+              </div>
+
+              <div className="flex space-x-3 pt-4">
+                <button onClick={() => setShowCreateRoom(false)} className="flex-1 btn-secondary">Cancel</button>
+                <button onClick={createRoom} disabled={loading} className="flex-1 btn-primary">
+                  {loading ? <Loader className="w-5 h-5 animate-spin mx-auto"/> : 'Create Room'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 2. Join Room Modal */}
+      {showJoinRoom && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6">
+            <h2 className="text-2xl font-bold mb-4">Join Room</h2>
+            <input 
+              value={roomCode} onChange={e => setRoomCode(e.target.value.toUpperCase())} 
+              className="input-field text-center text-2xl font-mono tracking-widest mb-6 uppercase placeholder:text-sm placeholder:font-sans placeholder:tracking-normal" 
+              placeholder="Enter 6-digit code" maxLength={6}
+            />
+            <div className="flex space-x-3">
+              <button onClick={() => setShowJoinRoom(false)} className="flex-1 btn-secondary">Cancel</button>
+              <button onClick={joinRoom} disabled={loading} className="flex-1 btn-primary">
+                {loading ? <Loader className="w-5 h-5 animate-spin mx-auto"/> : 'Join'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 3. Team Selection Modal (Triggered during Join if not assigned) */}
+      {showTeamSelection && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 text-center">
+            <h2 className="text-2xl font-bold mb-2">Select Your Team</h2>
+            <p className="text-gray-500 mb-6">Choose which side you want to battle on.</p>
+            
+            <div className="grid grid-cols-2 gap-4 mb-6">
+              <button onClick={() => setSelectedTeam(1)} className={`p-4 rounded-xl border-2 transition-all ${selectedTeam === 1 ? 'border-blue-500 bg-blue-50' : 'border-gray-200'}`}>
+                <div className="font-bold text-lg mb-1">Team 1</div>
+                <Users className="w-6 h-6 mx-auto text-blue-500"/>
+              </button>
+              <button onClick={() => setSelectedTeam(2)} className={`p-4 rounded-xl border-2 transition-all ${selectedTeam === 2 ? 'border-red-500 bg-red-50' : 'border-gray-200'}`}>
+                <div className="font-bold text-lg mb-1">Team 2</div>
+                <Users className="w-6 h-6 mx-auto text-red-500"/>
+              </button>
+            </div>
+
+            <div className="flex space-x-3">
+              <button onClick={() => setShowTeamSelection(false)} className="flex-1 btn-secondary">Cancel</button>
+              <button onClick={() => confirmTeamSelection(selectedTeam)} disabled={loading} className="flex-1 btn-primary">
+                {loading ? <Loader className="w-5 h-5 animate-spin mx-auto"/> : 'Confirm Selection'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 4. Room Lobby (Waiting State) */}
+      {currentRoom && currentRoom.room_status === 'lobby' && (
+        <div className="fixed inset-0 bg-white z-40 overflow-y-auto">
+          <div className="max-w-4xl mx-auto p-6">
+            <div className="flex justify-between items-center mb-8">
+               <h1 className="text-3xl font-bold">{currentRoom.name}</h1>
+               <button onClick={leaveRoom} className="text-gray-500 hover:text-red-500"><XCircle /></button>
+            </div>
+
+            <div className="bg-blue-600 text-white rounded-2xl p-8 text-center mb-8 shadow-lg relative overflow-hidden">
+               <div className="relative z-10">
+                 <p className="text-blue-100 mb-2 font-medium">ROOM CODE</p>
+                 <div className="text-6xl font-black font-mono tracking-wider mb-4">{currentRoom.code}</div>
+                 <p className="text-blue-200">Share this code with your teammates</p>
+               </div>
+               <div className="absolute -right-10 -top-10 text-blue-500/30 rotate-12"><Users size={200} /></div>
+            </div>
+
+            <div className="grid md:grid-cols-2 gap-8">
+              {/* Team 1 Roster */}
+              <div className="card">
+                <h3 className="font-bold text-lg mb-4 flex items-center text-blue-700">
+                  <span className="w-2 h-2 rounded-full bg-blue-500 mr-2"></span> Team 1
+                </h3>
+                <div className="space-y-2">
+                  {participants.filter(p => p.team_number === 1).map(p => (
+                    <div key={p.user_id} className="flex items-center p-2 bg-gray-50 rounded">
+                      <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center text-blue-600 font-bold mr-3">
+                        {p.user_email.charAt(0).toUpperCase()}
+                      </div>
+                      <span className="truncate">{p.user_email}</span>
+                      {p.user_id === currentRoom.created_by && <Crown className="w-4 h-4 ml-auto text-yellow-500" />}
+                    </div>
+                  ))}
+                  {participants.filter(p => p.team_number === 1).length === 0 && <p className="text-gray-400 italic text-sm">Waiting for players...</p>}
+                </div>
+              </div>
+
+              {/* Team 2 Roster */}
+              <div className="card">
+                <h3 className="font-bold text-lg mb-4 flex items-center text-red-700">
+                  <span className="w-2 h-2 rounded-full bg-red-500 mr-2"></span> Team 2
+                </h3>
+                <div className="space-y-2">
+                  {participants.filter(p => p.team_number === 2).map(p => (
+                    <div key={p.user_id} className="flex items-center p-2 bg-gray-50 rounded">
+                      <div className="w-8 h-8 bg-red-100 rounded-full flex items-center justify-center text-red-600 font-bold mr-3">
+                        {p.user_email.charAt(0).toUpperCase()}
+                      </div>
+                      <span className="truncate">{p.user_email}</span>
+                    </div>
+                  ))}
+                  {participants.filter(p => p.team_number === 2).length === 0 && <p className="text-gray-400 italic text-sm">Waiting for players...</p>}
+                </div>
+              </div>
+            </div>
+
+            {/* Host Controls */}
+            {isRoomCreator && (
+               <div className="fixed bottom-0 left-0 right-0 p-4 bg-white border-t flex justify-center shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
+                 <div className="max-w-4xl w-full flex justify-between items-center">
+                    <div className="text-sm text-gray-500">
+                       <span className="font-bold">{participants.length}</span> players ready
+                    </div>
+                    <button 
+                      onClick={startGame} 
+                      disabled={loading || participants.length < 2}
+                      className="btn-primary px-8 py-3 text-lg shadow-lg shadow-blue-500/30 flex items-center"
+                    >
+                      {loading ? <Loader className="animate-spin mr-2"/> : <Play className="fill-current mr-2 w-5 h-5"/>}
+                      Start Game
+                    </button>
+                 </div>
+               </div>
+            )}
+            
+            {!isRoomCreator && (
+              <div className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-gray-900 text-white px-6 py-3 rounded-full shadow-lg flex items-center animate-bounce">
+                <Loader className="w-4 h-4 animate-spin mr-3" />
+                Waiting for host to start...
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
             <button onClick={() => { if(currentRoom) supabase.from('team_rooms').select('*').eq('id', currentRoom.id).single().then(({data}) => data && setCurrentRoom(data as ExtendedTeamRoom)) }} className="btn-secondary"><RotateCcw className="w-4 h-4" /></button>
           </div>
         </div>
