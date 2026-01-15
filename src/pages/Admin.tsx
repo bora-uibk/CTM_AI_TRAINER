@@ -55,10 +55,13 @@ export default function Admin() {
 
     setActionLoading(userId)
     try {
-      const { error } = await supabase
-        .from('users')
-        .update({ is_admin: !currentIsAdmin })
-        .eq('id', userId)
+      const { data, error } = await supabase.functions.invoke('admin-manage-user', {
+        body: {
+          action: 'toggleAdmin',
+          userId: userId,
+          data: { isAdmin: !currentIsAdmin }
+        }
+      })
 
       if (error) throw error
 
@@ -84,8 +87,12 @@ export default function Admin() {
 
     setActionLoading(userId)
     try {
-      // Delete from auth.users (this will cascade to our users table)
-      const { error } = await supabase.auth.admin.deleteUser(userId)
+      const { data, error } = await supabase.functions.invoke('admin-manage-user', {
+        body: {
+          action: 'delete',
+          userId: userId
+        }
+      })
 
       if (error) throw error
 
@@ -107,8 +114,12 @@ export default function Admin() {
 
     setActionLoading(userId)
     try {
-      const { error } = await supabase.auth.admin.updateUserById(userId, {
-        password: newPassword
+      const { data, error } = await supabase.functions.invoke('admin-manage-user', {
+        body: {
+          action: 'changePassword',
+          userId: userId,
+          data: { password: newPassword }
+        }
       })
 
       if (error) throw error
