@@ -57,7 +57,7 @@ The Formula Student Trainer Platform is designed to help engineering students pr
 **Purpose**: AI model for content generation, embeddings, and intelligent responses
 
 **Services Used**:
-- `gemini-1.5-flash` - Fast content generation
+- `gemini-2.5-flash` - Fast content generation
 - `text-embedding-004` - Document embeddings for vector search
 - Batch embedding processing
 
