@@ -32,7 +32,7 @@ The Formula Student Trainer Platform is designed to help engineering students pr
 ## 🔗 Third-Party Integrations
 
 ### 1. Supabase
-**Purpose**: Backend-as-a-Service platform providing database, authentication, and serverless functions
+**Purpose**: Backend-as-a-Service platform providing database, authentication, and serverless functions. ***Please reach the team for third-party credentials.***
 
 **Services Used**:
 - PostgreSQL database with vector extensions
